@@ -30,6 +30,9 @@ class Gaussian(td.MultivariateNormal):
     def __rsub__(self, o: td.MultivariateNormal):
         return self.__sub__(o)
 
+    def __getitem__(self, item):
+        return Gaussian(self.mean.__getitem__(item), self.covariance_matrix.__getitem__(item))
+
     @staticmethod
     def conditional(x_prior: td.MultivariateNormal, y_prior: td.MultivariateNormal, y: torch.Tensor, Pxy: torch.Tensor):
         """ Computes x|y from x, y """
@@ -50,12 +53,22 @@ class Gaussian(td.MultivariateNormal):
 
         return Gaussian(mx_post, Px_post)
 
+
+def stack_distributions(list_of_gaussians, dim=1):
+    mean, cov = torch.stack([g.mean for g in list_of_gaussians], dim=dim), torch.stack([g.covariance_matrix for g in list_of_gaussians], dim=dim)
+    return Gaussian(mean, cov)
+
+
 class GaussianTransform(abc.ABC, td.Transform):
     domain = constraints.real_vector
     codomain = constraints.real_vector
 
     @abc.abstractmethod
     def apply(self, x: td.MultivariateNormal, full: bool):
+        pass
+
+    @abc.abstractmethod
+    def call(self, x: torch.Tensor):
         pass
 
     def _call(self, x):
@@ -70,6 +83,9 @@ class UnscentedTransform(GaussianTransform):
     def __init__(self, func):
         super().__init__()
         self._func = func
+
+    def call(self, x: torch.Tensor):
+        return self._func(x)
 
     def apply(self, x: td.MultivariateNormal, full=False):
         """
@@ -98,6 +114,7 @@ class UnscentedTransform(GaussianTransform):
         my = torch.einsum('i,ijk->jk', weights, y)
         res_y = (y - my.unsqueeze(0))
         Py = torch.einsum('i,ijk,ijl->jkl', weights, res_y, res_y)
+        Py = 0.5 * Py + 0.5 * Py.swapaxes(1, 2)
 
         if full:
             # Compute input/output covariance
@@ -118,11 +135,15 @@ class LinearizedTransform(GaussianTransform):
         self._func = func
         self._J = lambda x: torch.autograd.functional.jacobian(func, x, create_graph=create_graph)
 
+    def call(self, x: torch.Tensor):
+        return self._func(x)
+
     def apply(self, x: td.MultivariateNormal, full=False):
         my = self._func(x.mean)
         J = torch.stack([self._J(x.mean[i]) for i in range(x.batch_shape[0])], dim=0)
         Pxy = torch.bmm(x.covariance_matrix, J.swapaxes(1, 2))
         Py = torch.bmm(J, Pxy)
+        Py = 0.5 * Py + 0.5 * Py.swapaxes(1, 2)
 
         if full:
             return td.MultivariateNormal(my, Py), Pxy
@@ -141,13 +162,18 @@ class LinearTransform(GaussianTransform):
             b = torch.zeros((A.shape[0],))
         self._b = b
 
+    def call(self, x: torch.Tensor):
+        A, b = self._A.expand((*x.shape[:-1], *self._A.shape)), self._b.expand((*x.shape[:-1], *self._b.shape))
+        return torch.bmm(A, x.unsqueeze(-1)).squeeze(-1) + b
+
     def apply(self, x: td.MultivariateNormal, full=False):
         A, b = self._A.expand((*x.batch_shape, *self._A.shape)), self._b.expand((*x.batch_shape, *self._b.shape))
         my = torch.bmm(A, x.mean.unsqueeze(-1)).squeeze(-1) + b
-        Py = torch.bmm(torch.bmm(A, x.covariance_matrix), A.swapaxes(1, 2))
+        Pxy = torch.bmm(x.covariance_matrix, A.swapaxes(1, 2))
+        Py = torch.bmm(A, Pxy)
+        Py = 0.5 * Py + 0.5 * Py.swapaxes(1, 2)
 
         if full:
-            Pxy = torch.bmm(x.covariance_matrix, A.swapaxes(1, 2))
             return td.MultivariateNormal(my, Py), Pxy
         else:
             return td.MultivariateNormal(my, Py)
