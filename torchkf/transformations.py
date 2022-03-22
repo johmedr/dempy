@@ -50,6 +50,7 @@ class Gaussian(td.MultivariateNormal):
         K = torch.bmm(Pxy,  y_prior.covariance_matrix.inverse())
         mx_post = x_prior.mean + torch.bmm(K, (y - y_prior.mean).unsqueeze(-1)).squeeze(-1)
         Px_post = x_prior.covariance_matrix - torch.bmm(torch.bmm(K, y_prior.covariance_matrix), K.swapaxes(1,2))
+        Px_post = 0.5 * (Px_post + Px_post.swapaxes(1,2))
 
         return Gaussian(mx_post, Px_post)
 
@@ -114,7 +115,7 @@ class UnscentedTransform(GaussianTransform):
         my = torch.einsum('i,ijk->jk', weights, y)
         res_y = (y - my.unsqueeze(0))
         Py = torch.einsum('i,ijk,ijl->jkl', weights, res_y, res_y)
-        Py = 0.5 * Py + 0.5 * Py.swapaxes(1, 2)
+        Py = 0.5 * (Py + Py.swapaxes(1, 2))
 
         if full:
             # Compute input/output covariance
@@ -143,7 +144,7 @@ class LinearizedTransform(GaussianTransform):
         J = torch.stack([self._J(x.mean[i]) for i in range(x.batch_shape[0])], dim=0)
         Pxy = torch.bmm(x.covariance_matrix, J.swapaxes(1, 2))
         Py = torch.bmm(J, Pxy)
-        Py = 0.5 * Py + 0.5 * Py.swapaxes(1, 2)
+        Py = 0.5 * (Py + Py.swapaxes(1, 2))
 
         if full:
             return td.MultivariateNormal(my, Py), Pxy
@@ -171,10 +172,15 @@ class LinearTransform(GaussianTransform):
         my = torch.bmm(A, x.mean.unsqueeze(-1)).squeeze(-1) + b
         Pxy = torch.bmm(x.covariance_matrix, A.swapaxes(1, 2))
         Py = torch.bmm(A, Pxy)
-        Py = 0.5 * Py + 0.5 * Py.swapaxes(1, 2)
+        Py = 0.5 * (Py + Py.swapaxes(1, 2))
 
         if full:
             return td.MultivariateNormal(my, Py), Pxy
         else:
             return td.MultivariateNormal(my, Py)
 
+    def fit(self, x: torch.Tensor, y: torch.Tensor):
+        x = x.reshape((-1, self._A.shape[1]))
+        y = y.reshape((-1, self._A.shape[0]))
+        self._A = torch.linalg.lstsq(x, y).solution.T
+        self._b = torch.mean(y - x @ self._A.T, dim=0)
