@@ -171,3 +171,26 @@ class GaussianStateSpaceModel:
                                    self._parameters['observation_noise_cov'].expand((n_points, self._obs_dim, self._obs_dim)))
 
         return trajectory
+
+    def sample(self, n_points):
+        x = Gaussian.with_covariance_handle(
+            self._parameters['initial_state_mean'], self._parameters['initial_state_cov']).sample().unsqueeze(0)
+
+        process_noise = Gaussian(torch.zeros(self._state_dim), self._parameters['process_noise_cov'])
+        observation_noise = Gaussian(torch.zeros(self._obs_dim), self._parameters['observation_noise_cov'])
+        xs, ys = [], []
+
+        for i in range(n_points):
+            x_new = self.fwd_transform.call(x) + process_noise.sample((1,))
+            y_new = self.obs_transform.call(x_new) + observation_noise.sample((1,))
+
+            xs.append(x_new)
+            ys.append(y_new)
+
+            x = x_new
+
+        trajectory = dict()
+        trajectory['x'] = torch.concat(xs, dim=0)
+        trajectory['y'] = torch.concat(ys, dim=0)
+
+        return trajectory
