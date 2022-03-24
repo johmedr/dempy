@@ -72,19 +72,19 @@ class HierarchicalDynamicalModel:
         n_batchs, n_times, _ = y.shape
 
         process_noises = [
-            Gaussian(torch.zeros(system['state_dim']),
+            Gaussian.with_covariance_handle(torch.zeros(system['state_dim']),
                      system['process_noise_cov']).expand(torch.Size([n_batchs]))
             for system in self._systems
         ]
 
         observation_noises = [
-            Gaussian(torch.zeros(system['obs_dim']),
+            Gaussian.with_covariance_handle(torch.zeros(system['obs_dim']),
                      system['obs_noise_cov']).expand(torch.Size([n_batchs]))
             for system in self._systems
         ]
 
         x_prevs = [
-            Gaussian(system['initial_state_mean'],
+            Gaussian.with_covariance_handle(system['initial_state_mean'],
                      system['initial_state_cov']).expand(torch.Size([n_batchs]))
             for system in self._systems
         ]
@@ -269,24 +269,31 @@ class HierarchicalDynamicalModel:
         self._parameters['initial_state_cov'] = P0
 
     def blind_forecast(self, n_points):
-        x = self._parameters['initial_state_mean']
+        x = [system['initial_state_mean'].unsqueeze(0) for system in self._systems]
 
-        xs, ys = [], []
+        trajectory = []
 
         for i in range(n_points):
-            x_new = self.fwd_transform.call(x[None]).squeeze(0)
-            y_new = self.obs_transform.call(x_new[None]).squeeze(0)
+            level_traj = []
+            for k in range(self._n_systems):
+                if k == 0:
+                    x_new = self._systems[k]['fwd_transform'].call(x[k])
+                    y_new = self._systems[k]['obs_transform'].call(x_new)
+                else:
+                    x_new = self._systems[k]['fwd_transform'].call(x[k], level_traj[k-1]['y'])
+                    y_new = self._systems[k]['obs_transform'].call(x_new)
 
-            xs.append(x_new)
-            ys.append(y_new)
+                level_traj.append(dict(x=x_new, y=y_new))
+            trajectory.append(level_traj)
 
-            x = x_new
+            x = [traj['x'] for traj in level_traj]
 
-        trajectory = dict()
-        trajectory['x'] = Gaussian(torch.stack(xs, dim=0),
-                                   self._parameters['process_noise_cov'].expand((n_points, self._state_dim, self._state_dim)))
+        trajectory_ = []
+        for i, system in enumerate(self._systems):
+            x = Gaussian(torch.concat([t[i]['x'] for t in trajectory], dim=0),
+                         system['process_noise_cov'].expand((n_points, system['state_dim'], system['state_dim'])))
+            y = Gaussian(torch.concat([t[i]['y'] for t in trajectory], dim=0),
+                         system['obs_noise_cov'].expand((n_points, system['obs_dim'], system['obs_dim'])))
+            trajectory_.append(dict(x=x, y=y))
 
-        trajectory['y'] = Gaussian(torch.stack(ys, dim=0),
-                                   self._parameters['observation_noise_cov'].expand((n_points, self._obs_dim, self._obs_dim)))
-
-        return trajectory
+        return trajectory_
