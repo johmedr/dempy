@@ -9,11 +9,11 @@ def plot_traj(gaussian, epoch=0, n_states=4):
     xrange = np.arange(gaussian.batch_shape[-1])
     for i in range(n_states):
         fig.add_scatter(x=np.concatenate([xrange, xrange[::-1]], axis=0),
-                        y=np.concatenate([gaussian.mean.numpy()[epoch, :, i] + gaussian.stddev.numpy()[epoch, :, i],
-                                          gaussian.mean.numpy()[epoch, ::-1, i] - gaussian.stddev.numpy()[epoch, ::-1, i]], axis=0),
+                        y=np.concatenate([gaussian.mean.detach().numpy()[epoch, :, i] + gaussian.stddev.detach().numpy()[epoch, :, i],
+                                          gaussian.mean.detach().numpy()[epoch, ::-1, i] - gaussian.stddev.detach().numpy()[epoch, ::-1, i]], axis=0),
                         mode='lines', fill='toself', legendgroup=f'x[{i}]', showlegend=False,
                         line_color=px.colors.qualitative.T10[i], fillcolor=px.colors.qualitative.T10[i], opacity=0.15)
     for i in range(n_states):
-        fig.add_scatter(y=gaussian.mean[epoch, :, i], mode='lines', name=f'x[{i}]', legendgroup=f'x[{i}]',
+        fig.add_scatter(y=gaussian.mean.detach().numpy()[epoch, :, i], mode='lines', name=f'x[{i}]', legendgroup=f'x[{i}]',
                         line_color=px.colors.qualitative.T10[i])
     return fig

@@ -3,6 +3,7 @@ from torch.distributions import constraints
 import abc
 import torch
 import numpy as np
+from typing import Union
 
 
 class Gaussian(td.MultivariateNormal):
@@ -33,8 +34,10 @@ class Gaussian(td.MultivariateNormal):
     def __getitem__(self, item):
         return Gaussian(self.mean.__getitem__(item), self.covariance_matrix.__getitem__(item))
 
+
     @staticmethod
-    def conditional(x_prior: td.MultivariateNormal, y_prior: td.MultivariateNormal, y: torch.Tensor, Pxy: torch.Tensor):
+    def conditional(x_prior: td.MultivariateNormal,
+                    y_prior: td.MultivariateNormal, y: Union[torch.Tensor, td.MultivariateNormal], Pxy: torch.Tensor):
         """ Computes x|y from x, y """
         # if len(y) == 1:
         #     y = y.unsqueeze(0)
@@ -47,9 +50,17 @@ class Gaussian(td.MultivariateNormal):
         #     Pxy = Pxy.expand(y.shape[0], Pxy.shape)
         # else:
 
+        if isinstance(y, torch.Tensor):
+            y_ = y
+            Py_ = y_prior.covariance_matrix
+        elif isinstance(y, td.MultivariateNormal):
+            y_ = y.mean
+            Py_ = y_prior.covariance_matrix - y.covariance_matrix
+        else: raise ValueError('y must be MultivariateNormal or Tensor')
+
         K = torch.bmm(Pxy,  y_prior.covariance_matrix.inverse())
-        mx_post = x_prior.mean + torch.bmm(K, (y - y_prior.mean).unsqueeze(-1)).squeeze(-1)
-        Px_post = x_prior.covariance_matrix - torch.bmm(torch.bmm(K, y_prior.covariance_matrix), K.swapaxes(1,2))
+        mx_post = x_prior.mean + torch.bmm(K, (y_ - y_prior.mean).unsqueeze(-1)).squeeze(-1)
+        Px_post = x_prior.covariance_matrix - torch.bmm(torch.bmm(K, Py_), K.swapaxes(1,2))
         Px_post = 0.5 * (Px_post + Px_post.swapaxes(1,2))
 
         return Gaussian(mx_post, Px_post)

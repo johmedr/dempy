@@ -1,6 +1,7 @@
 from abc import ABC, abstractmethod
 from typing import Optional, Union
 from collections import OrderedDict
+from tqdm import tqdm
 
 import torch.autograd
 import torch.distributions as td
@@ -58,8 +59,8 @@ class GaussianStateSpaceModel:
                           self._parameters['initial_state_cov']).expand(torch.Size([n_batchs]))
 
         trajectory = []
-        for i in range(n_times):
-            x_prior, Px_post_x_prior = self.fwd_transform.apply(x_prev, full=True)
+        for i in tqdm(range(n_times), desc="Filter"):
+            x_prior, Px_prev_x_prior = self.fwd_transform.apply(x_prev, full=True)
             x_prior = x_prior + process_noise
 
             y_prior, Pxy = self.obs_transform.apply(x_prior, full=True)
@@ -68,29 +69,23 @@ class GaussianStateSpaceModel:
             x_post = Gaussian.conditional(x_prior, y_prior, y[:, i], Pxy)
 
             trajectory.append(
-                OrderedDict(x_prev=x_prev, x_prior=x_prior, x_post=x_post, y_prior=y_prior, Px_post_x_prior=Px_post_x_prior, Pxy=Pxy)
+                OrderedDict(x_prev=x_prev, x_prior=x_prior, x_post=x_post, y_prior=y_prior, Px_prev_x_prior=Px_prev_x_prior, Pxy=Pxy)
             )
 
             x_prev = x_post
 
         if backward_pass:
             # x(T|T) = x(post)
-            x_prev, x_prior, x_post, y_prior, Px_post_x_prior, Pxy = trajectory[-1].values()
-            x_backward = x_post
-            for i in range(n_times):
+            x_backward = trajectory[-1]['x_post']
+
+            for i in tqdm(range(n_times), desc='Smooth'):
                 # x(T-i-1|T-i-1), x(T-i|T-i-1),  x(T-i|T-i), Cov(x(T-i-1|T-i-1), x(T-i|T-i-1))
-                x_prev, x_prior, x_post, y_prior, Px_post_x_prior, Pxy = trajectory[-i-1].values()  # xT
+                x_prev, x_prior, x_post, y_prior, Px_prev_x_prior, Pxy = trajectory[-i-1].values()
 
-                # Jt = Cov(x(T-i-1|T-i-1), x(T-i|T-i-1)) * inverse( Cov(x(T-i|T-i-1)) )
-                J = torch.bmm(Px_post_x_prior, x_prior.covariance_matrix.inverse())
+                # x(t|T) = x(t|t) + S[x(t|t);x(t+1|t)] {S[x(t+1|t);x(t+1|t)]}^-1 ( x(t+1|T) - x(t+1|t) )
+                # back(t) = prev(t) + cov(prev(t),prior(t+1)) cov(prior(t+1))^-1 ( back(t+1) - prior(t+1) )
+                x_backward = Gaussian.conditional(x_prev, x_prior, x_backward, Px_prev_x_prior)
 
-                # x(T-i-1|T) = x(T-i-1|T-i-1) + Jt * (x(T-i|T) - x(T-i|T-i-1))
-                x_backward_new_mean = x_prev.mean + torch.bmm(J, (x_backward.mean - x_prior.mean).unsqueeze(-1)).squeeze(-1)
-                x_backward_new_cov = x_prev.covariance_matrix + \
-                                     torch.bmm(torch.bmm(J, (x_backward.covariance_matrix - x_prior.covariance_matrix)), J.swapaxes(1,2))
-                x_backward_new_cov = 0.5 * (x_backward_new_cov + x_backward_new_cov.swapaxes(1,2))
-
-                x_backward = Gaussian(x_backward_new_mean, x_backward_new_cov)
                 trajectory[-i-1]['x_backward'] = x_backward
 
         trajectory = OrderedDict(**{k: [i[k] for i in trajectory] for k in trajectory[0].keys()})
@@ -102,7 +97,7 @@ class GaussianStateSpaceModel:
 
         return trajectory
 
-    def complete_data_likelihood(self, y, trajectory=None):
+    def complete_data_likelihood(self, y, trajectory=None, per_timestep=True):
         if trajectory is None:
             trajectory = self.filter(y, backward_pass=True)
 
@@ -111,12 +106,16 @@ class GaussianStateSpaceModel:
         ll_x = 0
         ll_y = 0
 
-        for i in range(x_ref.batch_shape[1]):
+        for i in tqdm(range(x_ref.batch_shape[1])):
             if i > 0:
                 x_pred = self.fwd_transform.call(x_ref[:, i-1].mean)
                 ll_x += Gaussian(x_pred, self._parameters['process_noise_cov']).log_prob(x_ref[:, i].mean)
             y_pred = self.obs_transform.call(x_ref[:, i].mean)
             ll_y += Gaussian(y_pred, self._parameters['observation_noise_cov']).log_prob(y[:, i])
+
+        if per_timestep:
+            ll_x /= (x_ref.batch_shape[1] - 1)
+            ll_y /= (x_ref.batch_shape[1])
 
         return dict(ll=ll_x+ll_y, ll_x=ll_x, ll_y=ll_y)
 
