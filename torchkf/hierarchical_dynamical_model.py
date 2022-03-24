@@ -297,3 +297,46 @@ class HierarchicalDynamicalModel:
             trajectory_.append(dict(x=x, y=y))
 
         return trajectory_
+
+    def sample(self, n_points):
+        x = [Gaussian.with_covariance_handle(
+                system['initial_state_mean'],
+                system['initial_state_cov']).sample().unsqueeze(0)
+            for system in self._systems]
+
+        process_noises = [
+            Gaussian.with_covariance_handle(torch.zeros(system['state_dim']),
+                     system['process_noise_cov'])
+            for system in self._systems
+        ]
+
+        observation_noises = [
+            Gaussian.with_covariance_handle(torch.zeros(system['obs_dim']),
+                     system['obs_noise_cov'])
+            for system in self._systems
+        ]
+
+        trajectory = []
+
+        for i in range(n_points):
+            level_traj = []
+            for k in range(self._n_systems):
+                if k == 0:
+                    x_new = self._systems[k]['fwd_transform'].call(x[k]) + process_noises[k].sample((1,))
+                    y_new = self._systems[k]['obs_transform'].call(x_new) + observation_noises[k].sample((1,))
+                else:
+                    x_new = self._systems[k]['fwd_transform'].call(x[k], level_traj[k-1]['y']) + process_noises[k].sample((1,))
+                    y_new = self._systems[k]['obs_transform'].call(x_new) + observation_noises[k].sample((1,))
+
+                level_traj.append(dict(x=x_new, y=y_new))
+            trajectory.append(level_traj)
+
+            x = [traj['x'] for traj in level_traj]
+
+        trajectory_ = []
+        for i, system in enumerate(self._systems):
+            x = torch.concat([t[i]['x'] for t in trajectory], dim=0)
+            y = torch.concat([t[i]['y'] for t in trajectory], dim=0)
+            trajectory_.append(dict(x=x, y=y))
+
+        return trajectory_

@@ -70,7 +70,6 @@ class Gaussian(td.MultivariateNormal):
         elif isinstance(y, td.MultivariateNormal):
             y_ = y.mean
             Py_ = y_prior.covariance_matrix - y.covariance_matrix
-            print(Py_, y_prior.covariance_matrix, y.covariance_matrix)
         else: raise ValueError('y must be MultivariateNormal or Tensor')
 
         K = torch.bmm(Pxy,  y_prior.covariance_matrix.inverse())
