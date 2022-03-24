@@ -154,31 +154,65 @@ class HierarchicalDynamicalModel:
             )
 
             x_prevs = [_['x_post'] for _ in level_data]
-
+        #
         if backward_pass:
             raise NotImplementedError()
-            # # x(T|T) = x(post)
-            # x_backward = trajectory[-1]['x_post']
-            #
-            # for i in tqdm(range(n_times), desc='Smooth'):
-            #     # x(T-i-1|T-i-1), x(T-i|T-i-1),  x(T-i|T-i), Cov(x(T-i-1|T-i-1), x(T-i|T-i-1))
-            #     x_prev, x_prior, x_post, y_prior, Px_prev_x_prior, Pxy = trajectory[-i-1].values()
-            #
-            #     # x(t|T) = x(t|t) + S[x(t|t);x(t+1|t)] {S[x(t+1|t);x(t+1|t)]}^-1 ( x(t+1|T) - x(t+1|t) )
-            #     # back(t) = prev(t) + cov(prev(t),prior(t+1)) cov(prior(t+1))^-1 ( back(t+1) - prior(t+1) )
-            #     x_backward = Gaussian.conditional(x_prev, x_prior, x_backward, Px_prev_x_prior)
-            #
-            #     trajectory[-i-1]['x_backward'] = x_backward
-
-        # trajectory = [
-        #     OrderedDict(**{k: [i[k] for i in trajectory] for k in trajectory[0].keys()})
+        #     # x(T|T) = x(post)
+        #     x_backwards = [_['x_post'] for _ in trajectory[-1]]
         #
-        # ]
-        # for k, traj in trajectory.items():
-        #     if isinstance(traj[0], Gaussian):
-        #         trajectory[k] = stack_distributions(traj, dim=1)
-        #     else:
-        #         trajectory[k] = torch.stack(traj, dim=1)
+        #     for i in tqdm(range(n_times), desc='Smooth'):
+        #         level_data = trajectory[-i-1]
+        #         # Upward updates
+        #         for k in reversed(range(self._n_systems)):
+        #             if k == self._n_systems - 1:
+        #                 x_backward = Gaussian.conditional(
+        #                     level_data[k]['x_prev'],
+        #                     level_data[k]['x_prior'],
+        #                     x_backwards[k],
+        #                     level_data[k]['Px_prev_x_prior'],
+        #                 )
+        #                 u_backward = Gaussian.conditional(
+        #                     level_data[k]['u_prior'],
+        #                     level_data[k]['x_prior'],
+        #                     x_backwards[k],
+        #                     level_data[k]['Pu_x_prior'],
+        #                 )
+        #             else:
+        #                 x_backward = Gaussian.conditional(
+        #                     level_data[k]['x_prev'],
+        #                     (stack ( level_data[k]['x_prior'],  level_data[k]['u_prior']) ),
+        #                     ( x_backwards[k], u_backward(t-1) ),
+        #                     ( stack (level_data[k]['Px_prev_x_prior'], level_data[k]['Px_prev_x_prior'],
+        #                 )
+        #
+        #                 y_post = level_data[k-1]['u_post']
+        #
+        #
+        #
+        #         # x(T-i-1|T-i-1), x(T-i|T-i-1),  x(T-i|T-i), Cov(x(T-i-1|T-i-1), x(T-i|T-i-1))
+        #         x_prev, x_prior, x_post, y_prior, Px_prev_x_prior, Pxy = trajectory[-i-1].values()
+        #
+        #         # x(t|T) = x(t|t) + S[x(t|t);x(t+1|t)] {S[x(t+1|t);x(t+1|t)]}^-1 ( x(t+1|T) - x(t+1|t) )
+        #         # back(t) = prev(t) + cov(prev(t),prior(t+1)) cov(prior(t+1))^-1 ( back(t+1) - prior(t+1) )
+        #         x_backward = Gaussian.conditional(x_prev, x_prior, x_backward, Px_prev_x_prior)
+        #
+        #         trajectory[-i-1]['x_backward'] = x_backward
+        trajectory = [
+            OrderedDict(
+                **{k: [t[i][k] for t in trajectory]
+                   for k in trajectory[0][0].keys()}
+            )
+            for i in range(self._n_systems)
+        ]
+
+        for i in range(len(trajectory)):
+            for k, traj in trajectory[i].items():
+                if isinstance(traj[0], Gaussian):
+                    trajectory[i][k] = stack_distributions(traj, dim=1)
+                elif traj[0] is None:
+                    trajectory[i][k] = None
+                else:
+                    trajectory[i][k] = torch.stack(traj, dim=1)
 
         return trajectory
 
