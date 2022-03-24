@@ -3,7 +3,7 @@ from torch.distributions import constraints
 import abc
 import torch
 import numpy as np
-from typing import Union
+from typing import Union, Optional
 
 
 class Gaussian(td.MultivariateNormal):
@@ -33,7 +33,6 @@ class Gaussian(td.MultivariateNormal):
 
     def __getitem__(self, item):
         return Gaussian(self.mean.__getitem__(item), self.covariance_matrix.__getitem__(item))
-
 
     @staticmethod
     def conditional(x_prior: td.MultivariateNormal,
@@ -80,7 +79,7 @@ class GaussianTransform(abc.ABC, td.Transform):
         pass
 
     @abc.abstractmethod
-    def call(self, x: torch.Tensor):
+    def call(self, x: torch.Tensor, u: Optional[torch.Tensor] = None):
         pass
 
     def _call(self, x):
@@ -93,22 +92,35 @@ class UnscentedTransform(GaussianTransform):
     codomain = constraints.real_vector
 
     def __init__(self, func):
+        """
+        - func: should take a single input!
+        """
         super().__init__()
         self._func = func
 
-    def call(self, x: torch.Tensor):
+    def call(self, x: torch.Tensor, u: Optional[torch.Tensor] = None):
+        if u is not None:
+            x = torch.hstack([x, u])
         return self._func(x)
 
-    def apply(self, x: td.MultivariateNormal, full=False):
+    def apply(self, x: td.MultivariateNormal, u: Optional[td.MultivariateNormal] = None, full=False):
         """
         When full is true, computes the input/output covariance
         """
-        mx = x.mean
-        n = x.event_shape[0]
+        if u is not None:
+            mx = torch.hstack([x.mean, u.mean])
+            Px = torch.zeros((*u.batch_shape, mx.shape[-1], mx.shape[-1]))
+            Px[..., :x.event_shape[0], :x.event_shape[0]] = x.covariance_matrix
+            Px[..., x.event_shape[0]:, x.event_shape[0]:] = u.covariance_matrix
+        else:
+            mx = x.mean
+            Px = x.covariance_matrix
+
+        n = mx.shape[-1]
 
         # Compute sigma points
         kappa = max(0, n - 3)
-        U = torch.linalg.cholesky((n + kappa) * x.covariance_matrix, upper=True)
+        U = torch.linalg.cholesky((n + kappa) * Px, upper=True)
 
         sigmas = mx.repeat(2 * n + 1, 1, 1)  # shape is (2 * n + 1, n)
         for k in range(n):
@@ -147,13 +159,25 @@ class LinearizedTransform(GaussianTransform):
         self._func = func
         self._J = lambda x: torch.autograd.functional.jacobian(func, x, create_graph=create_graph)
 
-    def call(self, x: torch.Tensor):
+    def call(self, x: torch.Tensor, u: Optional[torch.Tensor] = None):
+        if u is not None:
+            x = torch.hstack([x, u])
         return self._func(x)
 
-    def apply(self, x: td.MultivariateNormal, full=False):
-        my = self._func(x.mean)
-        J = torch.stack([self._J(x.mean[i]) for i in range(x.batch_shape[0])], dim=0)
-        Pxy = torch.bmm(x.covariance_matrix, J.swapaxes(1, 2))
+    def apply(self, x: td.MultivariateNormal, u: Optional[td.MultivariateNormal] = None, full=False):
+
+        if u is not None:
+            mx = torch.hstack([x.mean, u.mean])
+            Px = torch.zeros((*u.batch_shape, mx.shape[-1], mx.shape[-1]))
+            Px[..., :x.event_shape[0], :x.event_shape[0]] = x.covariance_matrix
+            Px[..., x.event_shape[0]:, x.event_shape[0]:] = u.covariance_matrix
+        else:
+            mx = x.mean
+            Px = x.covariance_matrix
+
+        my = self._func(mx)
+        J = torch.stack([self._J(mx[i]) for i in range(x.batch_shape[0])], dim=0)
+        Pxy = torch.bmm(Px, J.swapaxes(1, 2))
         Py = torch.bmm(J, Pxy)
         Py = 0.5 * (Py + Py.swapaxes(1, 2))
 
@@ -174,14 +198,25 @@ class LinearTransform(GaussianTransform):
             b = torch.zeros((A.shape[0],))
         self._b = b
 
-    def call(self, x: torch.Tensor):
+    def call(self, x: torch.Tensor, u: Optional[torch.Tensor] = None):
+        if u is not None:
+            x = torch.hstack([x, u])
         A, b = self._A.expand((*x.shape[:-1], *self._A.shape)), self._b.expand((*x.shape[:-1], *self._b.shape))
         return torch.bmm(A, x.unsqueeze(-1)).squeeze(-1) + b
 
-    def apply(self, x: td.MultivariateNormal, full=False):
+    def apply(self, x: td.MultivariateNormal, u: Optional[td.MultivariateNormal] = None, full=False):
+        if u is not None:
+            mx = torch.hstack([x.mean, u.mean])
+            Px = torch.zeros((*u.batch_shape, mx.shape[-1], mx.shape[-1]))
+            Px[..., :x.event_shape[0], :x.event_shape[0]] = x.covariance_matrix
+            Px[..., x.event_shape[0]:, x.event_shape[0]:] = u.covariance_matrix
+        else:
+            mx = x.mean
+            Px = x.covariance_matrix
+
         A, b = self._A.expand((*x.batch_shape, *self._A.shape)), self._b.expand((*x.batch_shape, *self._b.shape))
-        my = torch.bmm(A, x.mean.unsqueeze(-1)).squeeze(-1) + b
-        Pxy = torch.bmm(x.covariance_matrix, A.swapaxes(1, 2))
+        my = torch.bmm(A, mx.unsqueeze(-1)).squeeze(-1) + b
+        Pxy = torch.bmm(Px, A.swapaxes(1, 2))
         Py = torch.bmm(A, Pxy)
         Py = 0.5 * (Py + Py.swapaxes(1, 2))
 
