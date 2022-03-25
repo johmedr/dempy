@@ -1,3 +1,4 @@
+import warnings
 from abc import ABC, abstractmethod
 from typing import Optional, Union, List
 from collections import OrderedDict
@@ -156,28 +157,43 @@ class HierarchicalDynamicalModel:
             x_prevs = [_['x_post'] for _ in level_data]
         #
         if backward_pass:
-            raise NotImplementedError()
-        #     # x(T|T) = x(post)
-        #     x_backwards = [_['x_post'] for _ in trajectory[-1]]
-        #
-        #     for i in tqdm(range(n_times), desc='Smooth'):
-        #         level_data = trajectory[-i-1]
-        #         # Upward updates
-        #         for k in reversed(range(self._n_systems)):
-        #             if k == self._n_systems - 1:
-        #                 x_backward = Gaussian.conditional(
-        #                     level_data[k]['x_prev'],
-        #                     level_data[k]['x_prior'],
-        #                     x_backwards[k],
-        #                     level_data[k]['Px_prev_x_prior'],
-        #                 )
-        #                 u_backward = Gaussian.conditional(
-        #                     level_data[k]['u_prior'],
-        #                     level_data[k]['x_prior'],
-        #                     x_backwards[k],
-        #                     level_data[k]['Pu_x_prior'],
-        #                 )
-        #             else:
+            x_backwards = [_['x_post'] for _ in trajectory[-1]]
+            for i in tqdm(range(n_times - 1), desc='Smooth'):
+                level_data = trajectory[-i-1]
+
+                # Upward updates
+                for k in reversed(range(self._n_systems)):
+
+                    x_backward = Gaussian.conditional(
+                        level_data[k]['x_prev'],
+                        level_data[k]['x_prior'],
+                        x_backwards[k],
+                        level_data[k]['Px_prev_x_prior'],
+                    )
+
+                    if k == 0:
+                        u_backward = None
+                    else:
+                        u_backward = Gaussian.conditional(
+                            level_data[k]['u_prior'],
+                            level_data[k]['x_prior'],
+                            x_backwards[k],
+                            level_data[k]['Pu_x_prior'],
+                        )
+                    trajectory[-i-1][k]['u_backward'] = u_backward
+                    trajectory[-i-2][k]['x_backward'] = x_backward
+                    if i == 0:
+                        trajectory[-1][k]['x_backward'] = trajectory[-1][k]['x_post']
+
+                x_backwards = [_['x_backward'] for _ in trajectory[-i-2]]
+
+                    # elif k == 0:
+                    #     x_backward = Gaussian.conditional(
+                    #         level_data[k]['x_prev'],
+                    #         level_data[k]['x_prior'],
+                    #         x_backwards[k],
+                    #         level_data[k]['Px_prev_x_prior'],
+                    #     )
         #                 x_backward = Gaussian.conditional(
         #                     level_data[k]['x_prev'],
         #                     (stack ( level_data[k]['x_prior'],  level_data[k]['u_prior']) ),
