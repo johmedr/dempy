@@ -1,6 +1,8 @@
 import plotly.graph_objs as go
 import plotly.express as px
 import numpy as np
+import torch
+import warnings
 
 
 def plot_traj(gaussian, epoch=0, n_states=4):
@@ -17,3 +19,12 @@ def plot_traj(gaussian, epoch=0, n_states=4):
         fig.add_scatter(y=gaussian.mean.detach().numpy()[epoch, :, i], mode='lines', name=f'x[{i}]', legendgroup=f'x[{i}]',
                         line_color=px.colors.qualitative.T10[i])
     return fig
+
+
+def handle_nan(x: torch.Tensor, where: str = '', what: str = 'A variable'):
+    if torch.isnan(x).any():
+        warnings.warn(f'{where}: {what} contains NaN values!'
+                      '\n Applied corrections may lead to numerical instabilities!', RuntimeWarning)
+        return torch.nan_to_num_(x)
+    else:
+        return x

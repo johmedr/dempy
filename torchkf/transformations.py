@@ -1,9 +1,12 @@
+import warnings
+
 import torch.distributions as td
 from torch.distributions import constraints
 import abc
 import torch
 import numpy as np
 from typing import Union, Optional
+from .utils import handle_nan
 
 
 class Gaussian(td.MultivariateNormal):
@@ -76,9 +79,15 @@ class Gaussian(td.MultivariateNormal):
             Py_ = y_prior.covariance_matrix - y.covariance_matrix
         else: raise ValueError('y must be MultivariateNormal or Tensor')
 
-        K = torch.bmm(Pxy,  y_prior.covariance_matrix.inverse())
+        Py_inv = y_prior.covariance_matrix.inverse()
+        K = torch.bmm(Pxy, Py_inv)
+        K = handle_nan(K, 'Gaussian.conditional', 'Kalman gain matrix')
+
         mx_post = x_prior.mean + torch.bmm(K, (y_ - y_prior.mean).unsqueeze(-1)).squeeze(-1)
+        mx_post = handle_nan(mx_post, 'Gaussian.conditional', 'Posterior mean')
+
         Px_post = x_prior.covariance_matrix - torch.bmm(torch.bmm(K, Py_), K.swapaxes(1,2))
+        Px_post = handle_nan(Px_post, 'Gaussian.conditional', 'Posterior mean')
 
         return Gaussian.with_covariance_handle(mx_post, Px_post)
 
@@ -139,6 +148,7 @@ class UnscentedTransform(GaussianTransform):
         # Compute sigma points
         kappa = max(0, n - 3)
         U = torch.linalg.cholesky((n + kappa) * Px, upper=True)
+        U = handle_nan(U, 'UnscentedTransform', 'Cholesky-decomposed matrix')
 
         sigmas = mx.repeat(2 * n + 1, 1, 1)  # shape is (2 * n + 1, n)
         for k in range(n):
@@ -151,17 +161,23 @@ class UnscentedTransform(GaussianTransform):
 
         # Pass through function
         y = torch.stack([self._func(sigmas[k]) for k in range(2 * n + 1)], dim=0)
+        y = handle_nan(y, 'UnscentedTransform', 'Output sigma points')
 
         # Computes output moments
         my = torch.einsum('i,ijk->jk', weights, y)
+        my = handle_nan(my, 'UnscentedTransform', 'Output mean')
+
         res_y = (y - my.unsqueeze(0))
         Py = torch.einsum('i,ijk,ijl->jkl', weights, res_y, res_y)
-        # Py = 0.5 * (Py + Py.swapaxes(1, 2))
+
+        Py = handle_nan(Py, 'UnscentedTransform', 'Output covariance')
 
         if full:
             # Compute input/output covariance
             res_x = (sigmas - mx.unsqueeze(0))
             Pxy = torch.einsum('i,ijk,ijl->jkl', weights, res_x, res_y)
+
+            Pxy = handle_nan(Pxy, 'UnscentedTransform', 'Input-output covariance')
 
             return Gaussian.with_covariance_handle(my, Py), Pxy
         else:
@@ -194,10 +210,18 @@ class LinearizedTransform(GaussianTransform):
             Px = x.covariance_matrix
 
         my = self._func(mx)
+
+        my = handle_nan(my, 'LinearizedTransform', 'Output mean')
+
         J = torch.stack([self._J(mx[i]) for i in range(x.batch_shape[0])], dim=0)
+
+        J = handle_nan(J, 'LinearizedTransform', 'Jacobian')
+
         Pxy = torch.bmm(Px, J.swapaxes(1, 2))
         Py = torch.bmm(J, Pxy)
-        # Py = 0.5 * (Py + Py.swapaxes(1, 2))
+
+        Pxy = handle_nan(Pxy, 'LinearizedTransform', 'Input-output covariance')
+        Py = handle_nan(Py, 'LinearizedTransform', 'Output covariance')
 
         if full:
             return Gaussian.with_covariance_handle(my, Py), Pxy
@@ -236,7 +260,10 @@ class LinearTransform(GaussianTransform):
         my = torch.bmm(A, mx.unsqueeze(-1)).squeeze(-1) + b
         Pxy = torch.bmm(Px, A.swapaxes(1, 2))
         Py = torch.bmm(A, Pxy)
-        # Py = 0.5 * (Py + Py.swapaxes(1, 2))
+
+        my = handle_nan(my, 'LinearTransform', 'Output mean')
+        Pxy = handle_nan(Pxy, 'LinearTransform', 'Input-output covariance')
+        Py = handle_nan(Py, 'LinearTransform', 'Output covariance')
 
         if full:
             return Gaussian.with_covariance_handle(my, Py), Pxy
