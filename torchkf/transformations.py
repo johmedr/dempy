@@ -13,14 +13,18 @@ class Gaussian(td.MultivariateNormal):
             return Gaussian(loc, cov)
         except ValueError:
             pass
-        cov = 0.5 * (cov + cov.swapaxes(-1, -2))
-        try:
-            return Gaussian(loc, cov)
-        except ValueError:
-            pass
 
+        if len(cov.shape) > 1 and cov.shape[-1] == cov.shape[-2]:
+            cov = 0.5 * (cov + cov.swapaxes(-1, -2))
+
+            try:
+                return Gaussian(loc, cov)
+            except ValueError:
+                pass
+    
         cov = cov + tol * torch.eye(cov.shape[-1]).expand(cov.shape)
         return Gaussian(loc, cov)
+
 
     def __add__(self, o: td.MultivariateNormal):
         if self.event_shape != o.event_shape:

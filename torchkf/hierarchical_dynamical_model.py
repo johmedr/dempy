@@ -128,7 +128,7 @@ class HierarchicalDynamicalModel:
                 if k == self._n_systems - 1:
                     y_post = y[:, i]
                 else:
-                    y_post = level_data[k-1]['u_post']
+                    y_post = level_data[k+1]['u_post']
 
                 x_post = Gaussian.conditional(
                     level_data[k]['x_prior'],
