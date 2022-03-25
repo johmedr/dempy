@@ -77,16 +77,20 @@ class GaussianStateSpaceModel:
         if backward_pass:
             # x(T|T) = x(post)
             x_backward = trajectory[-1]['x_post']
+            trajectory[-1]['x_backward'] = x_backward
 
-            for i in tqdm(range(n_times), desc='Smooth'):
+            for i in tqdm(range(n_times - 1), desc='Smooth'):
                 # x(T-i-1|T-i-1), x(T-i|T-i-1),  x(T-i|T-i), Cov(x(T-i-1|T-i-1), x(T-i|T-i-1))
-                x_prev, x_prior, x_post, y_prior, Px_prev_x_prior, Pxy = trajectory[-i-1].values()
+                # x_prev, x_prior, x_post, y_prior, Px_prev_x_prior, Pxy = trajectory[-i-1].values()
 
                 # x(t|T) = x(t|t) + S[x(t|t);x(t+1|t)] {S[x(t+1|t);x(t+1|t)]}^-1 ( x(t+1|T) - x(t+1|t) )
                 # back(t) = prev(t) + cov(prev(t),prior(t+1)) cov(prior(t+1))^-1 ( back(t+1) - prior(t+1) )
-                x_backward = Gaussian.conditional(x_prev, x_prior, x_backward, Px_prev_x_prior)
+                x_backward = Gaussian.conditional(trajectory[-i-1]['x_prev'],
+                                                  trajectory[-i-1]['x_prior'],
+                                                  x_backward,
+                                                  trajectory[-i-1]['Px_prev_x_prior'])
 
-                trajectory[-i-1]['x_backward'] = x_backward
+                trajectory[-i-2]['x_backward'] = x_backward
 
         trajectory = OrderedDict(**{k: [i[k] for i in trajectory] for k in trajectory[0].keys()})
         for k, traj in trajectory.items():
