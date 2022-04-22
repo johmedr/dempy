@@ -35,13 +35,19 @@ def block_matrix(nested_lists):
 
 
 class GaussianModel(dotdict): 
-    def __init__(self, f, g, m, n, l, pE, pC, hE, hC, gE, gC, Q, R, V, W, xP): 
+    def __init__(self, 
+        f=None, g=None, m=None, n=None, l=None, x=None, v=None, 
+        pE=None, pC=None, hE=None, hC=None, gE=None, gC=None, 
+        Q=None, R=None, V=None, W=None, xP=None, vP=None, sv=None, sw=None): 
         self.f  : Callable           = f  # forward function
         self.g  : Callable           = g  # observation function
 
         self.m  : int                = m  # number of inputs
         self.n  : int                = n  # number of states
         self.l  : int                = l  # number of outputs
+
+        self.x  : torch.Tensor       = x  # explicitly specified states
+        self.v  : torch.Tensor       = v  # explicitly specified inputs
 
         self.pE : torch.Tensor       = pE # prior expectation of parameters p
         self.pC : torch.Tensor       = pC # prior covariance of parameters p
@@ -55,43 +61,240 @@ class GaussianModel(dotdict):
         self.V  : torch.Tensor       = V  # fixed precision (input noise)
         self.W  : torch.Tensor       = W  # fixed precision (state noise)
         self.xP : torch.Tensor       = xP # precision (states)
+        self.vP : torch.Tensor       = vP # precision (inputs)
 
         self.sv : torch.Tensor       = sv # smoothness (input noise)
         self.sw : torch.Tensor       = sw # smoothness (state noise)
+class HierarchicalGaussianModel(list): 
+    def __init__(self, *models: GaussianModel): 
+        models = HierarchicalGaussianModel.prepare_models(*models)
+        super().__init__(models)
 
+    @staticmethod
+    def prepare_models(*models):
+        M = list(models)
 
+        # order 
+        g   = len(M)
+
+        # check supra-ordinate level and add one (with flat priors) if necessary
+        if callable(M[-1].g): 
+            M.append(GaussianModel(l=M[-1].m))
+            g = len(M)
+        M[-1].n = 0
+        M[-1].m = 0
+
+        for i in range(g): 
+            # check for hidden states
+            if M[i].f is not None and M[i].n is None and M[i].x is None:
+                raise ValueError('please specify hidden states or their number')
+
+            # default fields for static models (hidden states)
+            if not callable(M[i].f): 
+                M[i].f = lambda x: torch.zeros((0,1))
+                M[i].x = torch.zeros((0,1))
+                M[i].n = 0
+
+            # consistency and format check on states, parameters and functions
+            # ================================================================
+
+            # prior expectation of parameters pE
+            # ----------------------------------
+            if   M[i].pE is None: 
+                 M[i].pE = torch.zeros((0,0))
+            elif M[i].pE.shape == 1: 
+                 M[i].pE.unsqueeze(0)
+
+            p = M[i].pE.shape[1]
+
+            # and prior covariances pC
+            if  M[i].pC is None:
+                M[i].pC = torch.zeros((p, p))
+
+            # convert variance to covariance
+            elif not hasattr(M[i].pC, 'shape') or M[i].pC.shape == 0:  
+                M[i].pC = torch.eye(p) * M[i].pC
+
+            # convert variances to covariance
+            elif M[i].pC.shape == 1: 
+                M[i].pC = torch.diag(M[i].pC)
+
+            # check size
+            if M[i].pC.shape[0] != p or M[i].pC.shape[1] != p: 
+                raise ValueError(f'Wrong shape for model[{i}].pC: expected ({p},{p}) but got {M[i].pC.shape}.')
+
+        # get inputs
+        v = torch.zeros((0,0)) if M[-1].v is None else M[-1].v
+        if sum(v.shape) == 0:
+            if M[-2].m is not None: 
+                v = torch.zeros((M[-2].m, 1))
+            elif M[-1].l is not None: 
+                v = torch.zeros((M[-1].l, 1))
+        M[-1].l  = v.shape[0]
+        M[-1].v  = v
+
+        # check functions
+        for i in reversed(range(g - 1)):
+            x   = torch.zeros((M[i].n, 1)) if M[i].x is None else M[i].x
+            if sum(x.shape) == 0 and M[i].n > 0:
+                x = torch.zeros(M[i].n, 1)
+
+            # check function f(x, v, P)
+            if not callable(M[i].f): 
+                raise ValueError(f"Not callable function: model[{i}].f!")
+            try: 
+                f = M[i].f(x, v, M[i].pE)
+            except: 
+                raise ValueError(f"Error while calling function: model[{i}].f")
+            if f.shape != x.shape:
+                raise ValueError(f"Wrong shape for output of model[{i}].f (expected {x.shape}, got {f.shape}).")
+
+            # check function g(x, v, P)
+            if not callable(M[i].g): 
+                raise ValueError(f"Not callable function for model[{i}].g!")
+            M[i].m = v.shape[0]
+            try: 
+                v      = M[i].g(x, v, M[i].pE)
+            except: 
+                raise ValueError(f"Error while calling function: model[{i}].f")
+            M[i].l = v.shape[0]
+            M[i].n = x.shape[0]
+
+            M[i].v = v
+            M[i].x = x
+
+        # full priors on states
+        for i in range(g): 
+
+            # hidden states
+            M[i].xP = torch.Tensor() if M[i].xP is None else M[i].xP
+            if sum(M[i].xP.shape) == 1: 
+                M[i].xP = torch.eye(M[i].n, M[i].n) * xP.squeeze()
+            elif len(M[i].xP.shape) == 1 and M[i].xP.shape[0] == M[i].n: 
+                M[i].xP = torch.diag(M[i].xP)
+            else: 
+                M[i].xP = torch.zeros((M[i].n, M[i].n))
+
+            # hidden causes
+            M[i].vP = torch.Tensor() if M[i].vP is None else M[i].vP
+            if sum(M[i].vP.shape) == 1: 
+                M[i].vP = torch.eye(M[i].n, M[i].n) * vP.squeeze()
+            elif len(M[i].vP.shape) == 1 and M[i].vP.shape[0] == M[i].n: 
+                M[i].vP = torch.diag(M[i].vP)
+            else: 
+                M[i].vP = torch.zeros((M[i].n, M[i].n))
+
+        nx = sum(M[i].n for i in range(g))
+
+        # Hyperparameters and components (causes: Q V and hidden states R, W)
+        # ===================================================================
+
+        # check hyperpriors hE - [log]hyper-parameters and components
+        # -----------------------------------------------------------
+        pP = 1
+        for i in range(g):
+            M[i].Q = []
+            M[i].R = []
+            M[i].V = torch.Tensor()
+            M[i].W = torch.Tensor()
+
+            # check hyperpriors (expectation)
+            M[i].hE = torch.zeros((len(M[i].Q), 1)) if M[i].hE is None or sum(M[i].hE.shape) == 0 else M[i].hE
+            M[i].gE = torch.zeros((len(M[i].R), 1)) if M[i].gE is None or sum(M[i].gE.shape) == 0 else M[i].gE
+
+            #  check hyperpriors (covariances)
+            try:
+                M[i].hC * M[i].hE
+            except: 
+                M[i].hC = torch.eye(len(M[i].hE)) / pP 
+            try:
+                M[i].gC * M[i].gE
+            except: 
+                M[i].gC = torch.eye(len(M[i].gE)) / pP 
+
+            # check Q and R (precision components)
+
+            # check components and assume iid if not specified
+            if len(M[i].Q) > len(M[i].hE): 
+                M[i].hE = torch.zeros((M[i].Q), 1) + M[i].hE[1]
+            elif len(M[i].Q) < len(M[i].hE): 
+                M[i].Q  = [torch.eye(M[i].l)]
+                M[i].hE = M[i].hE[1]
+
+            if len(M[i].hE) > len(M[i].hC): 
+                M[i].hC = torch.eye(len(M[i].Q)) * M[i].hC[1]
+            
+            if len(M[i].R) > len(M[i].gE): 
+                M[i].gE = torch.zeros(len(M[i].R), 1)
+            elif len(M[i].R) < len(M[i].gE): 
+                M[i].R = [torch.eye(M[i].n)]
+                M[i].gE = M[i].gE[1]
+            
+            if len(M[i].gE) > len(M[i].gC): 
+                M[i].gC = torch.eye(len(M[i].R)) * M[i].gC[1]
+
+            # check consistency and sizes (Q)
+            # -------------------------------
+            for j in range(len(M[i].Q)):
+                if len(M[i].Q[j]) != M[i].l: 
+                    raise ValueError(f"Wrong shape for model[{i}].Q[{i}]"
+                                     f"(expected ({M[i].l},{M[i].l}), got {M[i].Q[j].shape})")
+            
+            # check consistency and sizes (R)
+            # -------------------------------
+            for j in range(len(M[i].R)):
+                if len(M[i].R[j]) != M[i].n: 
+                    raise ValueError(f"Wrong shape for model[{i}].R[{i}]"
+                                     f"(expected ({M[i].n},{M[i].n}), got {M[i].R[j].shape})")
+            
+            # check V and W (lower bound on precisions)
+            # -----------------------------------------
+            if len(M[i].V.shape) == 1 and len(M[i].V) == M[i].l: 
+                M[i].V = torch.diag(M[i].V)
+            elif len(M[i].V) != M[i].l:
+                try: 
+                    M[i].V = torch.eye(M[i].l) * M[i].V[0]   
+                except:
+                    if len(M[i].hE) == 0:
+                        M[i].V = torch.eye(M[i].l)
+                    else: 
+                        M[i].V = torch.zeros((M[i].l, M[i].l))
+
+            if len(M[i].W.shape) == 1 and len(M[i].W) == M[i].n: 
+                M[i].W = torch.diag(M[i].W)
+            elif len(M[i].W) != M[i].n:
+                try: 
+                    M[i].W = torch.eye(M[i].n) * M[i].W[0]
+                except:
+                    if len(M[i].gE) == 0:
+                        M[i].W = torch.eye(M[i].n)
+                    else: 
+                        M[i].W = torch.zeros((M[i].n,M[i].n))
+
+            # check smoothness parameter
+            s = 0 if nx == 0 else 1/2.
+            M[i].sv = s if M[i].sv is None else M[i].sv
+            M[i].sw = s if M[i].sw is None else M[i].sw
+
+        return M
 
 
 class DEMInversion: 
     def __init__(self, 
-                 systems: List[GaussianModel], 
-                 states_embedding_order: int, 
-                 causes_embedding_order: int): 
-        DEMInversion.check_systems(systems)
+                 systems: HierarchicalGaussianModel, 
+                 states_embedding_order: int = 4, 
+                 causes_embedding_order: int = 4): 
+        # DEMInversion.check_systems(systems)
 
         self.M  : List = systems                             # systems, from upper-most to lower-most
-        self.n  : int  = states_embedding_order              # embedding order of states
-        self.d  : int  = causes_embedding_order              # embedding order of causes
+        self.n  : int  = states_embedding_order + 1          # embedding order of states
+        self.d  : int  = causes_embedding_order + 1          # embedding order of causes
         self.nl : int  = len(systems)                        # number of levels
         self.nv : int  = sum(M.m for M in self.M)            # number of v (causal states)
         self.nx : int  = sum(M.n for M in self.M)            # number of x (hidden states)
-        self.ny : int  = self.M[-1].l                        # number of y (model output)
-        self.nc : int  = self.M[0].l                         # number of c (prior causes)
+        self.ny : int  = self.M[0].l                        # number of y (model output)
+        self.nc : int  = self.M[-1].l                         # number of c (prior causes)
         self.nu : int  = self.d * self.nv + self.n * self.nx # number of generalized states
-
-    @staticmethod
-    def check_systems(systems):
-        """ Checks for output/input mismatch """ 
-        if len(systems) ==  1:
-            return
-        elif len(systems) == 0:
-            raise ValueError("Empty list of systems")
-
-        for k in range(1, len(systems)):
-            if not systems[k-1].l == systems[k].m:
-                raise ValueError(f"Dimension mismatch between index {k}.obs_dim "
-                                 f"({systems[k-1].l}) and index {k+1}.input_dim ({systems[k-1].m}) "
-                                 f"(indexing from 1)")
 
     @staticmethod
     def generalized_covariance(
@@ -102,13 +305,13 @@ class DEMInversion:
         """ Mimics the behavior of spm_DEM_R.m
         s is the roughtness of the noise process. 
         """
-        k = torch.arange(p + 1)
+        k = torch.arange(p)
         x = np.sqrt(2) * s
         r = np.cumprod(1 - 2 * k) / (x**(2*k))
-        S = torch.zeros((p+1,p+1))
-        for i in range(p + 1): 
+        S = torch.zeros((p,p))
+        for i in range(p): 
             j = 2 * k - i
-            filt = torch.logical_and(j >= 0, j < p + 1)
+            filt = torch.logical_and(j >= 0, j < p)
             S[i,j[filt]] = (-1) ** (i) * r[filt]
 
         if prec:
@@ -125,14 +328,14 @@ class DEMInversion:
             inspired from spm_DEM_embed.m
             series_generalized = T * [series[t-order/2], dots, series[t+order/2]]
         """
-        n_batchs, n_times, dim = series.shape
-        E = torch.zeros((p + 1, p + 1))
+        n_times, dim = x.shape
+        E = torch.zeros((p, p)).double() 
         times = torch.arange(n_times)
 
         # Create E_ij(t) (note that indices start at 0) 
-        for i in range(p + 1): 
-            for j in range(p + 1): 
-                E[i, j] = (i + 1 - int((p + 1) / 2))**(j) / np.math.factorial(j) 
+        for i in range(p): 
+            for j in range(p): 
+                E[i, j] = float((i + 1 - int((p) / 2))**(j) / np.math.factorial(j))
 
         # Compute T
         T = torch.linalg.inv(E)
@@ -140,23 +343,22 @@ class DEMInversion:
         # Compute the slices
         slices = []
         for t in times: 
-            start = int(t - (p + 1) / 2)
-            end = start + p + 1
+            start = int(t - (p) / 2)
+            end = start + p
             if start < 0: 
-                slices.append(slice(0, p + 1))
+                slices.append(slice(0, p))
             elif end > n_times:
-                slices.append(slice(n_times - (p + 1), n_times))
+                slices.append(slice(n_times - (p), n_times))
             else: 
                 slices.append(slice(start, end))
 
-        series_slices = torch.stack([series[:, _slice] for _slice in slices], dim=0)
+        series_slices = torch.stack([x[_slice] for _slice in slices], dim=0)
 
         # series_slices is (n_times, order + 1, dim)
         # T is ( order+1, order+1)
-        generalized_coordinates = torch.einsum('ilj,kl->ijk', series_slices, T)
+        generalized_coordinates = series_slices.swapaxes(1, 2) @ T.T
 
         return generalized_coordinates
-
 
     def run(self, 
             y   : torch.Tensor,         # Observed timeseries with shape (time, dimension) 
@@ -171,18 +373,18 @@ class DEMInversion:
 
         # miscellanous variables
         # ----------------------
-        M  : List[GaussianModel] = self.M        # systems, from upper-most (index 0) to lower-most (index -1)
-        n  : int                 = self.n        # embedding order of states
-        d  : int                 = self.d        # embedding order of causes
-        nl : int                 = self.nl       # number of levels
-        nv : int                 = self.nv       # number of v (causal states)
-        nx : int                 = self.nx       # number of x (hidden states)
-        ny : int                 = self.nc       # number of y (model output)
-        nc : int                 = self.nc       # number of c (prior causes)
-        nu : int                 = self.nu       # number of generalized states
-        nT : int                 = y.shape[1]    # number of timesteps
+        M  : HierarchicalGaussianModel  = self.M        # systems, from upper-most (index 0) to lower-most (index -1)
+        n  : int                        = self.n        # embedding order of states
+        d  : int                        = self.d        # embedding order of causes
+        nl : int                        = self.nl       # number of levels
+        nv : int                        = self.nv       # number of v (causal states)
+        nx : int                        = self.nx       # number of x (hidden states)
+        ny : int                        = self.ny       # number of y (model output)
+        nc : int                        = self.nc       # number of c (prior causes)
+        nu : int                        = self.nu       # number of generalized states
+        nT : int                        = y.shape[0]    # number of timesteps
 
-        if ny != y.shape[2]: raise ValueError('Output dimension mismatch.')
+        if ny != y.shape[1]: raise ValueError('Output dimension mismatch.')
 
         # conditional moments
         # -------------------
@@ -211,7 +413,7 @@ class DEMInversion:
         v0, w0 = [], []
         for i in range(nl):
             v0.append(torch.zeros(M[i].l, M[i].l))
-            w0.append(torch.zeros(M[i].n, M[i].n))    
+            w0.append(torch.zeros(M[i].n, M[i].n))
         V0 = torch.kron(torch.zeros(n,n), torch.block_diag(*v0))
         W0 = torch.kron(torch.zeros(n,n), torch.block_diag(*w0))
         Qp = torch.block_diag(V0, W0)
@@ -227,13 +429,13 @@ class DEMInversion:
             for j in range(len(M[i].Q)): 
                 q    = list(*v0)
                 q[i] = M[i].Q[j]
-                Q.append(torch.block_diag(torch.kron(iVv, torch.block_diag(q)), W0))
+                Q.append(torch.block_diag(torch.kron(iVv, torch.block_diag(*q)), W0))
 
             # and fixed components (V) 
             # ------------------------
-            q    = [*v0]
+            q    = list(v0)
             q[i] = M[i].V
-            Qp  += torch.block_diag(torch.kron(iVv, torch.block_diag(q)), W0)
+            Qp  += torch.block_diag(torch.kron(iVv, torch.block_diag(*q)), W0)
 
 
             # noise on hidden states (R)
@@ -241,13 +443,13 @@ class DEMInversion:
             for j in range(len(M[i].R)): 
                 q    = list(*w0)
                 q[i] = M[i].R[j]
-                Q.append(torch.block_diag(V0, torch.kron(iVw, torch.block_diag(q))))
+                Q.append(torch.block_diag(V0, torch.kron(iVw, torch.block_diag(*q))))
 
             # and fixed components (W) 
             # ------------------------
-            q    = [*w0]
+            q    = list(w0)
             q[i] = M[i].W
-            Qp  += torch.block_diag(V0, torch.kron(iVw, torch.block_diag(q)))
+            Qp  += torch.block_diag(V0, torch.kron(iVw, torch.block_diag(*q)))
 
         # number of hyperparameters
         # -------------------------
@@ -255,18 +457,19 @@ class DEMInversion:
 
         # fixed priors on states (u) 
         # --------------------------
-        xP  =   torch.block_diag(M[i].xP for i in range(nl))
+        xP  =   torch.block_diag(*(M[i].xP for i in range(nl)))
         Px  =   torch.kron(DEMInversion.generalized_covariance(n, 0), xP)
         Pv  =   torch.kron(DEMInversion.generalized_covariance(d, 0), torch.zeros(nv, nv))
         Pu  =   torch.block_diag(Px, Pv)
         Pu +=   torch.eye(nu, nu) * nu * np.finfo(np.float64).eps
+        iqu =   dotdict()
 
         # hyperpriors 
         # -----------
-        hgE   = list(chain(M[i].hE for i in range(nl), M[i].gE for i in range(nl)))
-        hgC   = chain(M[i].hC for i in range(nl), M[i].gC for i in range(nl))
+        hgE   = list(chain((M[i].hE for i in range(nl)), (M[i].gE for i in range(nl))))
+        hgC   = chain((M[i].hC for i in range(nl)), (M[i].gC for i in range(nl)))
         ph.h  = torch.cat(hgE)           # prior expectation on h
-        ph.c  = torch.block_diag(hgC)    # prior covariance on h
+        ph.c  = torch.block_diag(*hgC)    # prior covariance on h
         qh.h  = ph.h                     # conditional expecatation 
         qh.c  = ph.c                     # conditional covariance
         ph.ic = torch.linalg.pinv(ph.c)  # prior precision      
@@ -286,15 +489,15 @@ class DEMInversion:
             qp.p.append(torch.zeros(M[i].p))    # initial qp.p 
             pp.c.append(Ui.T @ M[i].pC @ Ui)    # prior covariance
 
-        Up = torch.block_diag(qp.u)
+        Up = torch.block_diag(*qp.u)
 
         # initialize and augment with confound parameters B; with flat priors
         # -------------------------------------------------------------------
-        nP    = sum(M[i].p for i in range(nl))  # number of model parameters
+        nP    = sum(M[i].p for i in range(nl - 1))  # number of model parameters
         nb    = x.shape[-1]                     # number of confounds
         nn    = nb * ny                         # number of nuisance parameters
-        nf    = np + nn                         # number of free parameters
-        pp.c  = torch.block_diag(pp.c)
+        nf    = nP + nn                         # number of free parameters
+        pp.c  = torch.block_diag(*pp.c)
         pp.ic = torch.linalg.inv(pp.c)
         pp.p  = torch.cat(qp.p)
 
@@ -410,7 +613,7 @@ class DEMInversion:
                     # evaluatefunction: 
                     # E = v - g(x,v) and derivatives dE.dx
                     # ====================================
-                    E,dE : Tuple[torch.Tensor, dotdict] = eval(M, qu, qp)
+                    E, dE = eval(M, qu, qp)
 
                     # conditional covariance [of states u]
                     # ------------------------------------
@@ -479,7 +682,7 @@ class DEMInversion:
                 # Gradients and curvatures for E-step 
 
                 if nP > 0: 
-                    for i in range(np): 
+                    for i in range(nP): 
                         CJu[:, i]   = qu.c @ dE.dup[i].T @ iS
                         dedup[:, i] = dE.dup[i]
                     dWdp  = CJp.T @ dE.du.T
@@ -519,7 +722,7 @@ class DEMInversion:
                 dFdhh = dFdhh - ph.ic
 
                 # update ReML extimate of parameters
-                dh = ... 
+                dh = ValueError()
                 dh = max(min(dh, 2), -2)
                 qh.h = qh.h + dh 
                 mh = mh + dh
@@ -574,8 +777,8 @@ class DEMInversion:
                 
                 # gradients and curvatures
                 # ------------------------
-                dFdp(ip)     = dFdp(ip)     - pp.ic*(qp.e - pp.p);
-                dFdpp(ip,ip) = dFdpp(ip,ip) - pp.ic;
+                dFdp[ip]     = dFdp(ip)     - pp.ic*(qp.e - pp.p);
+                dFdpp[ip,ip] = dFdpp(ip,ip) - pp.ic;
                 
                 # update conditional expectation
                 # ------------------------------
