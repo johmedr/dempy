@@ -4,6 +4,9 @@ from typing import Dict, Optional, List, Callable, Tuple
 import abc
 import numpy as np
 from itertools import chain
+import warnings
+
+torch.set_default_dtype(torch.float64)
 
 class dotdict(dict):
     """dot.notation access to dictionary attributes"""
@@ -29,10 +32,87 @@ def block_matrix(nested_lists):
                 arr_row.append(e)
             else: 
                 arr_row.append(np.zeros((row_sizes[i], col_sizes[j])))
-        print([_.shape for _ in arr_row])
+
         arr.append(np.concatenate(arr_row, axis=1))
     return np.concatenate(arr, axis=0)
 
+class cell(list): 
+    def __init__(self, m, n): 
+        super().__init__([[] for j in range(n)] for i in range(m))
+    
+    def __getitem__(self, index): 
+        if isinstance(index, tuple): 
+            i, j = index
+            return self[i][j]
+        else: 
+            return super().__getitem__(index)
+    
+    def __setitem__(self, index, value): 
+        if isinstance(index, tuple): 
+            i, j = index
+            xi = self[i]
+            xi[j] = value
+            self[i] = xi
+        else: 
+            super().__setitem__(index, value)
+
+def compute_df_d2f(func, inputs, input_keys=None) -> Tuple[dotdict, dotdict]:
+    """ compute first- and second-order derivatives of `func` evaluated at `inputs`. 
+    Returns a tuple of (df, d2f) where: 
+    df.dk is the derivative wrt input indexed  by input key 'dk'
+    d2f.di.dj is the 2nd-order derivative wrt inputs 'di' and 'dj'. 
+    """
+    if input_keys is None:
+        input_keys = [f'dx{i}' for i in range(len(inputs))]
+    def handle_shapes(inputs):
+        xs = []
+        for x in inputs:
+            if any(_ == 0 for _ in x.shape) or len(x.shape) == 0: 
+                xs.append(torch.Tensor())
+            elif len(x.shape) == 1:
+                xs.append(x)
+            elif x.shape[0] == x.shape[1] == 1: 
+                xs.append(x.squeeze(1))
+            else:
+                xs.append(x.squeeze())
+        return tuple(xs)
+    
+    inputs = handle_shapes(inputs)
+    
+    Ji = torch.autograd.functional.jacobian(func, inputs)
+    df = dotdict()
+    for i in range(len(inputs)): 
+        if any(_ > 0 for _ in Ji[i].shape):
+            df[input_keys[i]] = Ji[i]
+        else: 
+            df[input_keys[i]] = torch.Tensor() 
+    # dim 1 of J are df[:]/dx[i]
+    # dim 2 of J are df[j]/dx[:]
+    
+    d2f = dotdict()
+    for i in range(len(inputs)): 
+        # Compute d/dxj(dfdxi)
+        Hi = torch.autograd.functional.jacobian(
+                lambda *x: torch.autograd.functional.jacobian(func, x)[i],
+                inputs, vectorize=True)
+        Hij = dotdict()
+        for j in range(len(inputs)): 
+            if all(_ > 0 for _ in Hi[j].shape):
+                Hij[input_keys[j]] = Hi[j]
+            else: 
+                Hij[input_keys[j]] = torch.Tensor()
+        d2f[input_keys[i]] = Hij
+    # dim 1 of H are df[:]/d(x[i]x[:])
+    # dim 2 of H are df[:]/d(x[:]x[j])
+    # dim 3 of H are df[k]/d(x[:]x[:])
+    return df, d2f
+
+def compute_dx(f, dfdu, t): 
+    if len(f.shape) == 1: 
+        f = f.unsqueeze(-1)
+    J = torch.Tensor(block_matrix([[np.zeros((1,1)), []], [f * t, t * dfdu]]))
+    dx = torch.linalg.matrix_exp(J)
+    return dx[1:, 0, None]
 
 class GaussianModel(dotdict): 
     def __init__(self, 
@@ -65,6 +145,7 @@ class GaussianModel(dotdict):
 
         self.sv : torch.Tensor       = sv # smoothness (input noise)
         self.sw : torch.Tensor       = sw # smoothness (state noise)
+
 class HierarchicalGaussianModel(list): 
     def __init__(self, *models: GaussianModel): 
         models = HierarchicalGaussianModel.prepare_models(*models)
@@ -91,7 +172,7 @@ class HierarchicalGaussianModel(list):
 
             # default fields for static models (hidden states)
             if not callable(M[i].f): 
-                M[i].f = lambda x: torch.zeros((0,1))
+                M[i].f = lambda *x: torch.zeros((0,1))
                 M[i].x = torch.zeros((0,1))
                 M[i].n = 0
 
@@ -152,11 +233,18 @@ class HierarchicalGaussianModel(list):
             # check function g(x, v, P)
             if not callable(M[i].g): 
                 raise ValueError(f"Not callable function for model[{i}].g!")
+            if M[i].m is not None and M[i].m != v.shape[0]:
+                warnings.warn(f'Declared input shape of model {i} ({M[i].m}) '
+                    f'does not match output shape of model[{i+1}].g ({v.shape[0]})!')
             M[i].m = v.shape[0]
             try: 
                 v      = M[i].g(x, v, M[i].pE)
             except: 
                 raise ValueError(f"Error while calling function: model[{i}].f")
+            if M[i].l is not None and M[i].l != v.shape[0]:
+                warnings.warn(f'Declared output shape of model {i} ({M[i].l}) '
+                    f'does not match output of model[{i}].g ({v.shape[0]})!')
+
             M[i].l = v.shape[0]
             M[i].n = x.shape[0]
 
@@ -330,6 +418,7 @@ class DEMInversion:
         """
         n_times, dim = x.shape
         E = torch.zeros((p, p)).double() 
+        x = torch.DoubleTensor(x)
         times = torch.arange(n_times)
 
         # Create E_ij(t) (note that indices start at 0) 
@@ -358,7 +447,141 @@ class DEMInversion:
         # T is ( order+1, order+1)
         generalized_coordinates = series_slices.swapaxes(1, 2) @ T.T
 
-        return generalized_coordinates
+        return generalized_coordinates.swapaxes(1, 2)
+
+    def eval_error_diff(self, M: List[HierarchicalGaussianModel], qu: dotdict, qp: dotdict): 
+        # Get dimensions
+        # ==============
+        nl = len(M)
+        ne = sum(m.l for m in M) 
+        nv = sum(m.m for m in M)
+        nx = sum(m.n for m in M)
+        np = sum(M[i].p for i in range(nl - 1))
+        ny = M[0].l
+        nc = M[-1].l
+        n  = self.n
+        d  = self.d
+
+        # Evaluate functions at each level
+        # ================================
+        f = []
+        g = []
+        x = []
+        v = []
+        nxi = 0
+        nvi = 0
+        for i in range(nl - 1):
+            xi  = qu.x[0, nxi:nxi + M[i].n]
+            vi  = qu.v[0, nvi:nvi + M[i].m]
+
+            nxi = nxi + M[i].n
+            nvi = nvi + M[i].m
+
+            x.append(xi)
+            v.append(vi)
+
+            p = M[i].pE + qp.u[i] @ qp.p[i]
+            try: 
+                res = M[i].f(xi, vi, p)
+            except: 
+                raise RuntimeError(f"Error while evaluating model[{i}].f!")
+            f.append(res)
+
+            try: 
+                res = M[i].g(xi, vi, p)
+            except: 
+                raise RuntimeError(f"Error while evaluating model[{i}].g!")
+            g.append(res)
+
+        f = torch.cat(f)
+        g = torch.cat(g)
+
+
+        # Evaluate derivatives at each level
+        # df.dv = cell(nl - 1,nl - 1)
+        # df.dx = cell(nl - 1,nl - 1)
+        # df.dp = cell(nl - 1,nl - 1)
+        # dg.dv = cell(nl    ,nl - 1)
+        # dg.dx = cell(nl    ,nl - 1)
+        # dg.dp = cell(nl    ,nl - 1)
+        df  = list()
+        d2f = list()
+        dg  = list()
+        d2g = list()
+        for i in range(nl - 1): 
+            xvp = tuple(_ if sum(_.shape) > 0 else torch.Tensor([]) for _ in  (x[i], v[i], qp.p[i], qp.u[i], M[i].pE))
+
+            dfi, d2fi = compute_df_d2f(lambda x, v, q, u, p: M[i].f(x, v, p + u @ q), xvp, ['dx', 'dv', 'dp', 'du', 'dq']) 
+            dgi, d2gi = compute_df_d2f(lambda x, v, q, u, p: M[i].g(x, v, p + u @ q), xvp, ['dx', 'dv', 'dp', 'du', 'dq']) 
+
+            df.append(dfi)
+            d2f.append(d2fi)
+            dg.append(dgi)
+            d2g.append(d2gi)
+
+
+        df = dotdict({k: torch.block_diag(*(dfi[k] for dfi in df)) for k in df[0].keys()}) 
+        dg = dotdict({k: torch.block_diag(*(dgi[k] for dgi in dg)) for k in dg[0].keys()}) 
+        # add an extra row to accomodate the highest hierarchical level
+        for k in dg.keys():
+            dg[k] = torch.cat([dg[k], torch.zeros(1, dg[k].shape[1])], dim=0)
+
+        de  = dotdict(
+            dy= torch.eye(ne, ny), 
+            dc= torch.diag(-torch.ones(max(ne, nc) - (nc - ne)), nc - ne)[:ne, :nc]
+        )
+
+
+        # Prediction error (E) - causes        
+        Ev = [torch.cat([qu.y[0], qu.v[0]]) -  torch.cat([g, qu.u[0]])]
+        for i in range(1, n):
+            Evi           = de.dy @ qu.y[i] + de.dc @ qu.u[i] - dg.dx @ qu.x[i] - dg.dv @ qu.v[i]
+            Ev.append(Evi)
+
+        # Prediction error (E) - states
+        Ex = [qu.x[1] - f]
+        for i in range(1, n-1):
+            Exi = qu.x[i + 1] - df.dx @ qu.x[i] - df.dv @ qu.v[i]
+            Ex.append(Exi)
+        Ex.append(torch.zeros_like(Exi))
+
+        Ev = torch.stack(Ev, dim=0).reshape((-1, 1))
+        Ex = torch.stack(Ex, dim=0).reshape((-1, 1))
+        # TODO: potentielle erreur ici avec spm_vec({Ev, Ex}) (column or row order)
+        E  = torch.cat([Ev, Ex], dim=0)
+
+        # generalised derivatives
+        dgdp = [dg.dp]
+        dfdp = [df.dp]
+        for i in range(1, n):
+            dgdpi = dg.dp
+            dfdpi = df.dp
+
+            for ip in range(np): 
+                dgdpi[:, ip] = d2g.dp.dx[ip] @ qu.x[i] + d2g.dp.dv[ip] @ qu.v[i]
+                dfdpi[:, ip] = d2f.dp.dx[ip] @ qu.x[i] + d2f.dp.dv[ip] @ qu.v[i]
+            
+            dfdp.append(dfdpi)
+            dgdp.append(dgdpi)
+        df.dp = torch.cat(dfdp)
+        dg.dp = torch.cat(dgdp)
+
+        de.dy = torch.kron(torch.eye(n, n), de.dy)
+        de.dc = torch.kron(torch.eye(n, d), de.dc)
+        df.dy = torch.kron(torch.eye(n, n), torch.zeros(nx, ny))
+        df.dc = torch.kron(torch.eye(n, d), torch.zeros(nx, nc))
+        dg.dx = torch.kron(torch.eye(n, n), dg.dx)
+        dg.dv = torch.kron(torch.eye(n, d), dg.dv)
+        df.dv = torch.kron(torch.eye(n, d), df.dv)
+        df.dx = torch.kron(torch.eye(n, n), df.dx) - torch.kron(torch.diag(torch.ones(n - 1), 1), torch.eye(nx, nx))
+
+        dE    = dotdict()
+        dE.dy = torch.cat([de.dy, df.dy])
+        dE.dc = torch.cat([de.dc, df.dc])
+        dE.dp = - torch.cat([dg.dp, df.dp])
+        dE.du = - torch.Tensor(block_matrix([[dg.dx, dg.dv], [df.dx, df.dv]]))
+
+        return E, dE
 
     def run(self, 
             y   : torch.Tensor,         # Observed timeseries with shape (time, dimension) 
@@ -395,6 +618,10 @@ class DEMInversion:
         qp : dotdict             = dotdict()  # loop variable for qP
         qh : dotdict             = dotdict()  # loop variable for qH
 
+        # Errors
+        # ------
+        qE : List[dotdict]       = list() 
+
         # prior moments
         # -------------
         pu     = dotdict()  # prior moments of model states - p(u)
@@ -405,7 +632,13 @@ class DEMInversion:
         # ---------------
         U = DEMInversion.generalized_coordinates(u, d)
         Y = DEMInversion.generalized_coordinates(y, n) 
-        X = DEMInversion.generalized_coordinates(x, n)
+
+        # X = DEMInversion.generalized_coordinates(x, n) TODO
+
+        # setup integration times
+        td = 1 / nD
+        te = 0
+        tm = 4
 
         # precision components Q requiring [Re]ML estimators (M-step)
         # -----------------------------------------------------------
@@ -524,8 +757,9 @@ class DEMInversion:
         qu.y = torch.zeros(n, ny)
         qu.u = torch.zeros(n, nc)
 
-        # initialize arrys for hierarchical structure of x[0] and v[0]
-
+        # initialize arrays for hierarchical structure of x[0] and v[0]
+        qu.x[0] = torch.cat([M[i].x for i in range(0, nl - 1)], axis=0).squeeze()
+        qu.v[0] = torch.cat([M[i].v for i in range(1, nl)], axis=0).squeeze()
 
         # derivatives for Jacobian of D-step 
         # ----------------------------------
@@ -596,7 +830,7 @@ class DEMInversion:
                 
                 # D-step: until convergence for static systems
                 # ============================================ 
-                Fd =  -np.exp(64)
+                Fd = - np.exp(64)
                 for iD in range(nD): 
 
                     # sampling time 
@@ -610,29 +844,31 @@ class DEMInversion:
                     # compute dEdb (derivatives of confounds)
                     # NotImplemented 
 
+                    print("Loop: ", iD, iT)
                     # evaluatefunction: 
                     # E = v - g(x,v) and derivatives dE.dx
                     # ====================================
-                    E, dE = eval(M, qu, qp)
+                    E, dE = self.eval_error_diff(M, qu, qp)
 
                     # conditional covariance [of states u]
                     # ------------------------------------
                     qu.p  = dE.du.T @ iS @ dE.du + Pu
-                    qu.c  = torch.diag(ju) @ torch.linalg.inv(qu.p) @ torch.diag(ju)
+                    # qu.c  = torch.diag(ju) @ torch.linalg.inv(qu.p) @ torch.diag(ju) # todo
+                    qu.c = torch.linalg.inv(qu.p)
                     iqu.c = iqu.c + torch.logdet(qu.c)
 
                     # and conditional covariance [of parameters P]
                     # --------------------------------------------
                     dE.dP = dE.dp # no dedb for now
-                    ECEu  = dE.du.T @ qu.c @ dE.du
-                    ECEp  = dE.dp.T @ qp.c @ dE.dp
+                    ECEu  = dE.du @ qu.c @ dE.du.T
+                    ECEp  = dE.dp @ qp.c @ dE.dp.T
 
                     if nx == 0: 
                         pass 
 
                     # save states at iT
                     if iD == 0: 
-                        qE.append(E)
+                        qE.append(E.squeeze(1))
                         qU.append(qu) 
 
                     # uncertainty about parameters dWdv, ...
@@ -649,18 +885,18 @@ class DEMInversion:
 
                     # conditional modes
                     # -----------------
-                    u = torch.cat([qu.x, qu.v, qu.y, qu.u])
+                    u = torch.cat([qu.x, qu.v, qu.y, qu.u], dim=1).reshape((-1,1))
 
                     # first-order derivatives
-                    dVdu    = - dE.du.T @ iS @ E - dWdu/2 - Pu * u[0:nu]
+                    dVdu    = - dE.du.T @ iS @ E - dWdu/2 - Pu @ u[0:nu]
                     
                     # second-order derivatives
                     dVduu   = - dE.du.T @ iS @ dE.du - dWduu / 2 - Pu
                     dVduy   = - dE.du.T @ iS @ dE.dy 
                     dVduc   = - dE.du.T @ iS @ dE.dc
-
+                    
                     # gradient
-                    dFdy = torch.cat(dVdu, dVdy, dVdc)
+                    dFdu = torch.cat([dVdu.reshape((-1,)), dVdy.reshape((-1,)), dVdc.reshape((-1,))], dim=0)
 
                     # Jacobian (variational flow)
                     dFduu = torch.Tensor(block_matrix([[dVduu, dVduy, dVduc],
@@ -668,10 +904,9 @@ class DEMInversion:
                                                        [   [],    [], dVdcc]]))
 
                     # update conditional modes of states 
-                    f     = K * dFdu  + D @ u
+                    f     = K * dFdu.unsqueeze(-1)  + D @ u
                     dfdu  = K * dFduu + D
-
-                    du = ... 
+                    du = compute_dx(f, dfdu, td)
                     q  = u + du
 
                     qu.x = q[:n]
@@ -689,7 +924,7 @@ class DEMInversion:
                     dWdpp = CJp.T @ dE.dpu
 
                 # Accumulate dF/dP = <dL/dp>, dF/dpp = ... 
-                dFdp  = dFdp  - dWdp / 2 - dE.dP.T @ iS @ E
+                dFdp  = dFdp  - dWdp / 2 - (dE.dP.T @ iS @ E).squeeze(1)
                 dFdpp = dFdpp - dWdpp /2 - dE.dP.T @ iS @ dE.dP
                 qp.ic = qp.ic + dE.dP.T @ iS @ dE.dP
 
