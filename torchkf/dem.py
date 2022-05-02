@@ -1,6 +1,7 @@
 import torch
 from .transformations import *
 from typing import Dict, Optional, List, Callable, Tuple
+from collections import OrderedDict
 import abc
 import numpy as np
 from itertools import chain
@@ -8,7 +9,7 @@ import warnings
 
 torch.set_default_dtype(torch.float64)
 
-class dotdict(dict):
+class dotdict(OrderedDict):
     """dot.notation access to dictionary attributes"""
     __getattr__ = dict.__getitem__
     __setattr__ = dict.__setitem__
@@ -184,11 +185,11 @@ class HierarchicalGaussianModel(list):
             # prior expectation of parameters pE
             # ----------------------------------
             if   M[i].pE is None: 
-                 M[i].pE = torch.zeros((0,0))
+                 M[i].pE = torch.zeros((0,1))
             elif M[i].pE.shape == 1: 
-                 M[i].pE.unsqueeze(0)
+                 M[i].pE.unsqueeze(1)
 
-            p = M[i].pE.shape[1]
+            p = M[i].pE.shape[0]
 
             # and prior covariances pC
             if  M[i].pC is None:
@@ -528,6 +529,16 @@ class DEMInversion:
         for k in dg.keys():
             dg[k] = torch.cat([dg[k], torch.zeros(1, dg[k].shape[1])], dim=0)
 
+        d2f = dotdict({i: dotdict({j: [d2fk[i][j] for d2fk in d2f] for j in d2f[0].keys()}) for i in d2f[0].keys()})
+        d2g = dotdict({i: dotdict({j: [d2gk[i][j] for d2gk in d2g] for j in d2g[0].keys()}) for i in d2g[0].keys()}) 
+
+        dfdpx = [torch.block_diag(*(_[ip] for _ in d2f.dp.dx)) for ip in range(np)]
+        dfdpv = [torch.block_diag(*(_[ip] for _ in d2f.dp.dv)) for ip in range(np)]
+        dgdpx = [torch.block_diag(*(_[ip] for _ in d2g.dp.dx)) for ip in range(np)]
+        dgdpx = [torch.cat([dgdpxi, torch.zeros(1, dgdpxi.shape[1])]) for dgdpxi in dgdpx]
+        dgdpv = [torch.block_diag(*(_[ip] for _ in d2g.dp.dv)) for ip in range(np)]
+        dgdpv = [torch.cat([dgdpvi, torch.zeros(1, dgdpvi.shape[1])]) for dgdpvi in dgdpv]
+
         de  = dotdict(
             dy= torch.eye(ne, ny), 
             dc= torch.diag(-torch.ones(max(ne, nc) - (nc - ne)), nc - ne)[:ne, :nc]
@@ -537,7 +548,14 @@ class DEMInversion:
         # Prediction error (E) - causes        
         Ev = [torch.cat([qu.y[0], qu.v[0]]) -  torch.cat([g, qu.u[0]])]
         for i in range(1, n):
-            Evi           = de.dy @ qu.y[i] + de.dc @ qu.u[i] - dg.dx @ qu.x[i] - dg.dv @ qu.v[i]
+            try: 
+                Evi = de.dy @ qu.y[i] + de.dc @ qu.u[i] - dg.dx @ qu.x[i] - dg.dv @ qu.v[i]
+            except:
+                print('de.dy @ qu.y[i] with:', de.dy.shape, qu.y[i].shape)
+                print('de.dc @ qu.u[i] with:', de.dc.shape, qu.u[i].shape)
+                print('dg.dx @ qu.x[i] with:', dg.dx.shape, qu.x[i].shape)
+                print('dg.dv @ qu.v[i] with:', dg.dv.shape, qu.v[i].shape)
+                raise
             Ev.append(Evi)
 
         # Prediction error (E) - states
@@ -560,8 +578,9 @@ class DEMInversion:
             dfdpi = df.dp
 
             for ip in range(np): 
-                dgdpi[:, ip] = d2g.dp.dx[ip] @ qu.x[i] + d2g.dp.dv[ip] @ qu.v[i]
-                dfdpi[:, ip] = d2f.dp.dx[ip] @ qu.x[i] + d2f.dp.dv[ip] @ qu.v[i]
+
+                dgdpi[:, ip] = dgdpx[ip] @ qu.x[i] + dgdpv[ip] @ qu.v[i]
+                dfdpi[:, ip] = dfdpx[ip] @ qu.x[i] + dfdpv[ip] @ qu.v[i]
             
             dfdp.append(dfdpi)
             dgdp.append(dgdpi)
@@ -586,14 +605,14 @@ class DEMInversion:
         return E, dE
 
     def run(self, 
-            y   : torch.Tensor,         # Observed timeseries with shape (time, dimension) 
-            u   : torch.Tensor,         # Explanatory variables, inputs or prior expectation of causes
-            x   : torch.Tensor,         # Confounds
-            nD  : int = 1,              # Number of D-steps 
-            nE  : int = 8,              # Number of E-steps
-            nM  : int = 8,              # Number of M-steps
-            K   : int = 1,              # Learning rate
-            tol : float = np.exp(-4)    # Numerical tolerance
+            y   : torch.Tensor,                     # Observed timeseries with shape (time, dimension) 
+            u   : Optional[torch.Tensor] = None,    # Explanatory variables, inputs or prior expectation of causes
+            x   : Optional[torch.Tensor] = None,    # Confounds
+            nD  : int = 1,                          # Number of D-steps 
+            nE  : int = 8,                          # Number of E-steps
+            nM  : int = 8,                          # Number of M-steps
+            K   : int = 1,                          # Learning rate
+            tol : float = np.exp(-4)                # Numerical tolerance
             ):
 
         # miscellanous variables
@@ -635,10 +654,21 @@ class DEMInversion:
 
         # embedded series
         # ---------------
-        U = DEMInversion.generalized_coordinates(u, d)
-        Y = DEMInversion.generalized_coordinates(y, n) 
+        
+        if y.shape[1] != ny: 
+            raise ValueError(f'Last dimension of input y ({y.shape}) does not match that of deepest model cause ({M[0].l})')
 
-        # X = DEMInversion.generalized_coordinates(x, n) TODO
+        if u is None:
+            u = torch.zeros(nT, M[-1].l)
+        elif u.shape[1] != nc: 
+            raise ValueError(f'Last dimension of input u ({u.shape}) does not match that of deepest model cause ({M[-1].l})')
+
+        if x is None:
+            x = torch.zeros(nT, 0)
+        
+        Y = DEMInversion.generalized_coordinates(y, n) 
+        U = DEMInversion.generalized_coordinates(u, d) if u.shape[-1] > 0 else torch.zeros((nT, d, 0))
+        X = DEMInversion.generalized_coordinates(x, d) if x.shape[-1] > 0 else torch.zeros((nT, d, 0))
 
         # setup integration times
         td = 1 / nD
@@ -851,8 +881,6 @@ class DEMInversion:
                     # compute dEdb (derivatives of confounds)
                     # NotImplemented 
 
-                    print("Loop: ", iD, iT)
-                    print({k:v.shape for k,v in qu.items()})
                     # evaluatefunction: 
                     # E = v - g(x,v) and derivatives dE.dx
                     # ====================================
@@ -1051,3 +1079,23 @@ class DEMInversion:
             F[iE]  = Fi;
             A[iE]  = Ai;
 
+        results    = dotdict()
+        results.F  = F
+        results.A  = A
+
+        qH.h       = qh.h
+        qH.C       = qh.c
+
+        results.qH = qH
+
+        qP.P       = Up @ qp.e + torch.cat([m.pE for m in M])
+        qP.C       = Up @ qp.c[ip,ip] @ Up.T
+        qP.dFdp    = Up @ dFdp[ip]
+        qP.dFdpp   = Up @ dFdpp[ip,ip] @ Up.T
+
+        results.qP = qP
+
+        results.qU = dotdict({k: torch.stack([qU[i][k] for i in range(len(qU))], dim=0) for k in qU[0].keys()})
+        results.qE = qE
+
+        return results
