@@ -10,12 +10,39 @@ class dotdict(dict):
 def block_matrix(nested_lists): 
     # a is a list of list [[[], [], tensor], [[], tensor, []]]
     # row and column size must be similar
-    sizes = np.zeros((len(nested_lists), len(nested_lists[0]), 2))
+
+
+    row_sizes = [0] * len(nested_lists)
+    col_sizes = [0] * len(nested_lists[0])
     for i, row in enumerate(nested_lists): 
+        if len(row) != len(col_sizes): 
+            raise ValueError(f'Invalid number of columns at row {i + 1}: expected {len(col_sizes)}, got {len(row)}.')
+        row_sizes[i] = 0
         for j, e in enumerate(row): 
-            sizes[i, j, :] = e.shape if len(e) > 0 else (0, 0)
-    row_sizes = sizes.max(1)[:, 0].astype(int)
-    col_sizes = sizes.max(0)[:, 1].astype(int)
+            if len(e) > 0: 
+                # check for height
+                if row_sizes[i]  > 0: 
+                    if e.shape[0] != row_sizes[i] : 
+                        raise ValueError(f'Unable to build block matrix: the number of rows of block [{i+1},{j+1}] (shape {e.shape}) '
+                                         f'does not match that of the previous block ({row_sizes[i]}).')
+                else: 
+                    row_sizes[i]  = e.shape[0]
+
+                # check for width
+                if col_sizes[j] > 0:
+                    if e.shape[1] != col_sizes[j]: 
+                        raise ValueError(f'Unable to build block matrix: the number of columns of block [{i+1},{j+1}] (shape {e.shape}) '
+                                         f'does not match that of the previous block ({col_sizes[j]}).')
+                else: 
+                    col_sizes[j] = e.shape[1]
+
+                # check empty columns
+                if i == -1 and col_sizes[j] == 0:
+                    raise ValueError(f'Column {i+1} contains only empty matrices!')
+
+        # check empty rows
+        if row_sizes[i] == 0:
+            raise ValueError(f'Row {i+1} contains only empty matrices!')
     
     arr = []
     for i, row in enumerate(nested_lists): 
