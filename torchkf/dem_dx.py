@@ -56,12 +56,17 @@ def compute_df_d2f(func, inputs, input_keys=None) -> Tuple[dotdict, dotdict]:
     # d2f is (Nf, Na, Nb)
     return df, d2f
 
-def compute_dx(f, dfdu, t, isreg=False): 
+def compute_dx(f, dfdx, t, isreg=False): 
     if len(f.shape) == 1: 
         f = f.unsqueeze(-1)
     if isreg:
-        t  = np.exp(t - torch.logdet(dfdu)/f.shape[0]);
-    J = torch.Tensor(block_matrix([[np.zeros((1,1)), []], [f * t, t * dfdu]]))
+        t  = np.exp(t - torch.logdet(dfdx)/f.shape[0])
+    if f.shape[0] != dfdx.shape[0]: 
+        raise ValueError(f'Shape mismatch: first dim of f {f.shape} must match that of df/dx {dfdx.shape}.')
+    if len(f) == len(dfdx) == 0:
+        return torch.Tensor([[]])
+
+    J = torch.Tensor(block_matrix([[np.zeros((1,1)), []], [f * t, dfdx * t]]))
     dx = torch.linalg.matrix_exp(J)
     return dx[1:, 0, None]
 

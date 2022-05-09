@@ -71,8 +71,8 @@ class HierarchicalGaussianModel(list):
             # ----------------------------------
             if   M[i].pE is None: 
                  M[i].pE = torch.zeros((0,1))
-            elif M[i].pE.shape == 1: 
-                 M[i].pE.unsqueeze(1)
+            elif len(M[i].pE.shape) == 1: 
+                 M[i].pE = M[i].pE.unsqueeze(-1)
 
             p = M[i].pE.shape[0]
 
@@ -81,11 +81,11 @@ class HierarchicalGaussianModel(list):
                 M[i].pC = torch.zeros((p, p))
 
             # convert variance to covariance
-            elif not hasattr(M[i].pC, 'shape') or M[i].pC.shape == 0:  
+            elif not hasattr(M[i].pC, 'shape') or len(M[i].pC.shape) == 0:  
                 M[i].pC = torch.eye(p) * M[i].pC
 
             # convert variances to covariance
-            elif M[i].pC.shape == 1: 
+            elif len(M[i].pC.shape) == 1: 
                 M[i].pC = torch.diag(M[i].pC)
 
             # check size
