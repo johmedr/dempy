@@ -5,6 +5,7 @@ import numpy as np
 from itertools import chain
 import logging
 from pprint import pformat
+from tqdm import tqdm
 
 logging.basicConfig()
 
@@ -163,6 +164,7 @@ class DEMInversion:
 
             dfi, d2fi = compute_df_d2f(lambda x, v, q, u, p: M[i].f(x, v, p + u @ q), xvp, ['dx', 'dv', 'dp', 'du', 'dq']) 
             dgi, d2gi = compute_df_d2f(lambda x, v, q, u, p: M[i].g(x, v, p + u @ q), xvp, ['dx', 'dv', 'dp', 'du', 'dq']) 
+            print(dgi.dv)
 
             df.append(dfi)
             d2f.append(d2fi)
@@ -223,10 +225,10 @@ class DEMInversion:
             Ex.append(Exi)
         Ex.append(torch.zeros_like(Exi))
 
-        Ev = torch.stack(Ev, dim=0).reshape((-1, 1))
-        Ex = torch.stack(Ex, dim=0).reshape((-1, 1))
-        # TODO: potentielle erreur ici avec spm_vec({Ev, Ex}) (column or row order)
-        E  = torch.cat([Ev, Ex], dim=0)
+        Ev = torch.cat(Ev)
+        Ex = torch.cat(Ex)
+        # nb: order must match that of Qp, ie: (ny*n, nv*n, nx*n)
+        E  = torch.cat([Ev, Ex]).unsqueeze(1) 
 
         # generalised derivatives
         dgdp = [dg.dp]
@@ -253,7 +255,7 @@ class DEMInversion:
         dg.dx               = torch.kron(torch.eye(n, n), dg.dx)
         df.dx               = torch.kron(torch.eye(n, n), df.dx) - torch.kron(torch.diag(torch.ones(n - 1), 1), torch.eye(nx, nx))
 
-        # embed to n>=d
+        # embed to n >= d
         dedc                = torch.zeros(n*ne, n*nc) 
         dedc[:n*ne,:d*nc]   = torch.kron(torch.eye(n, d), de.dc)
         de.dc               = dedc
@@ -270,7 +272,9 @@ class DEMInversion:
         dE.dy = torch.cat([de.dy, df.dy])
         dE.dc = torch.cat([de.dc, df.dc])
         dE.dp = - torch.cat([dg.dp, df.dp])
-        dE.du = - torch.Tensor(block_matrix([[dg.dx, dg.dv], [df.dx, df.dv]]))
+        dE.du = - torch.Tensor(block_matrix([
+                [dg.dx, dg.dv], 
+                [df.dx, df.dv]]))
 
         dE.dup = []
         for ip in range(np): 
@@ -379,6 +383,12 @@ class DEMInversion:
         W0 = torch.kron(torch.zeros(n,n), torch.block_diag(*w0))
         Qp = torch.block_diag(V0, W0)
 
+        # Qp is: 
+        # ((ny*n,    0,    0)
+        #  (   0, n*nv,    0)
+        #  (   0,    0, n*nx) 
+
+
         for i in range(nl): 
             # Precision (R) and covariance of generalized errors
             # --------------------------------------------------
@@ -424,7 +434,7 @@ class DEMInversion:
         Pv[:d*nv,:d*nv] =   torch.kron(DEMInversion.generalized_covariance(d, 0), torch.zeros(nv, nv))
         Pu              =   torch.block_diag(Px, Pv)
         Pu[:nu,:nu]    +=   torch.eye(nu, nu) * nu * np.finfo(np.float64).eps
-        log.debug(f'Pu: {Pu}')
+
         iqu             =   dotdict()
 
         # hyperpriors 
@@ -470,10 +480,10 @@ class DEMInversion:
         # --------------------------------------------------------
         qp.e  = list()
         for i in range(nl - 1): 
-            try: 
-                qp.e.append(qp.p[i] + qp.u[i].T @ (M[i].P - M[i].pE))
-            except KeyError: 
-                qp.e.append(qp.p[i])
+            # try: 
+            qp.e.append(qp.p[i] + qp.u[i].T @ (M[i].P - M[i].pE))
+            # except KeyError: 
+            #     qp.e.append(qp.p[i])
         qp.e  = torch.cat(qp.e)
         qp.c  = torch.zeros(nf, nf)
         qp.b  = torch.zeros(ny, nb)
@@ -491,7 +501,7 @@ class DEMInversion:
 
         # initialize arrays for hierarchical structure of x[0] and v[0]
         qu.x[0] = torch.cat([M[i].x for i in range(0, nl - 1)], axis=0).squeeze()
-        # print('first:', qu.x)
+        print('first:', qu.x)
         qu.v[0] = torch.cat([M[i].v for i in range(1, nl)], axis=0).squeeze()
 
         # derivatives for Jacobian of D-step 
@@ -549,7 +559,6 @@ class DEMInversion:
             # [re-]set precisions using ReML hyperparameter estimates
             # -------------------------------------------------------
             iS    = Qp + sum(Q[i] * np.exp(qh.h[i]) for i in range(nh))
-            log.debug(f'iS: {pformat(iS)}')
 
             # [re-]adjust for confounds
             # -------------------------
@@ -558,7 +567,7 @@ class DEMInversion:
 
             # [re-]set states & their derivatives
             # -----------------------------------
-            qu = qU[0] if len(qU) > 0 else qu
+            qu = qU[0] if iE > 0 else qu
 
             # D-step: (nD D-steps for each sample) 
             # ====================================
@@ -571,7 +580,6 @@ class DEMInversion:
                 
                 # D-step: until convergence for static systems
                 # ============================================ 
-                Fd = - np.exp(64)
                 for iD in range(nD): 
 
                     # sampling time 
@@ -599,7 +607,7 @@ class DEMInversion:
                     quc          = torch.zeros((nv+nx)*n, (nv+nx)*n)
                     quc[:nu,:nu] = torch.diag(ju.double()) @ torch.linalg.inv(qu.p[:nu,:nu]) @ torch.diag(ju.double()) 
                     qu.c         = quc
-                    iqu.c        = iqu.c + torch.logdet(qu.c)
+                    iqu.c        = iqu.c + torch.logdet(qu.c[:nu,:nu])
 
 
                     # and conditional covariance [of parameters P]
@@ -613,8 +621,12 @@ class DEMInversion:
 
                     # save states at iT
                     if iD == 0: 
-                        qE.append(E.squeeze(1))
-                        qU.append(dotdict(**qu)) 
+                        if iE == 0:
+                            qE.append(E.squeeze(1))
+                            qU.append(dotdict(**qu)) 
+                        else: 
+                            qE[iT] = E.squeeze(1)
+                            qU[iT] = dotdict(**qu) 
 
                     # uncertainty about parameters dWdv, ...
                     if nP > 0: 
@@ -646,7 +658,6 @@ class DEMInversion:
                     # gradient
                     dFdu = torch.cat([dVdu.reshape((-1,)), dVdy.reshape((-1,)), dVdc.reshape((-1,))], dim=0)
 
-                    log.debug(dFdu)
                     # Jacobian (variational flow)
                     dFduu = torch.Tensor(block_matrix([[dVduu, dVduy, dVduc],
                                                        [   [], dVdyy,    []],
@@ -685,7 +696,7 @@ class DEMInversion:
 
 
             # M-step - optimize hyperparameters (mh = total update)
-            mh = 0
+            mh = torch.zeros(nh)
             for iM in range(nM): 
                 # [re-]set precisions using ReML hyperparameter estimates
                 iS    = Qp + sum(Q[i] * np.exp(qh.h[i]) for i in range(nh))
@@ -718,7 +729,8 @@ class DEMInversion:
                 qh.c = torch.linalg.inv(dFdhh)
 
                 # convergence (M-step)
-                # if (dFdh.T @ dh < TOL) || 
+                if nh > 0 and (((dFdh.T @ dh).squeeze() < tol) or torch.linalg.norm(dh, 1) < tol): 
+                    break
 
             # conditional precision of parameters
             # -----------------------------------
@@ -750,33 +762,44 @@ class DEMInversion:
                  + torch.logdet(qp.c[ip][:, ip] @ pp.ic * nT) * nT / 2\
                  + torch.logdet(qh.c @ ph.ic * nT) * nT / 2
 
+
+            print(iqu.c)
+            print(torch.logdet(iS[je][:, je]))
+            print(torch.trace(iS[je][:, je] @ EE[je][:, je]))
             Li = Lu + Lp
             Ai = Lu + La 
+            print('Fi: ', Fi)
+            print('Li: ', Li)
+            print('Ai: ', Ai)
 
             # if F is increasng save expansion point and derivatives 
-            if Li > Fi or iE < 2: 
+            if Li > Fi or iE < 1: 
                 # Accept free-energy and save current parameter estimates
                 #--------------------------------------------------------
-                Fi      = Li;
-                te      = min(te + 1/2.,4);
-                tm      = min(tm + 1/2.,4);
-                B.qp    = dotdict(**qp);
-                B.qh    = dotdict(**qh);
-                B.pp    = dotdict(**pp);
+                Fi      = Li
+                te      = min(te + 1/2.,4.)
+                tm      = min(tm + 1/2.,4.)
+                B.qp    = dotdict(**qp)
+                B.qh    = dotdict(**qh)
+                B.pp    = dotdict(**pp)
                 
                 # E-step: update expectation (p)
                 # ==============================
                 
                 # gradients and curvatures
                 # ------------------------
-                dFdp[ip]      = dFdp[ip]      - pp.ic * (qp.e - pp.p);
-                dFdpp[ip][:, ip] = dFdpp[ip][:, ip] - pp.ic;
+                dFdp[ip]         = dFdp[ip]      - pp.ic * (qp.e - pp.p)
+                dFdpp[ip][:, ip] = dFdpp[ip][:, ip] - pp.ic
                 
                 # update conditional expectation
                 # ------------------------------
-                dp      = compute_dx(dFdpp,dFdp,te, isreg=True) 
+                dp      = compute_dx(dFdp,dFdpp,te, isreg=True) 
                 qp.e    = qp.e + dp[ip]
-                qp.p    = qp.e
+                qp.p     = list()
+                npi     = 0
+                for i in range(nl - 1): 
+                    qp.p.append(qp.e[npi:npi + M[i].p])
+                    npi += M[i].p
                 qp.b    = dp[ib]
 
             else:
@@ -784,15 +807,27 @@ class DEMInversion:
                 # otherwise, return to previous expansion point
                 # ---------------------------------------------
                 nM      = 1;
-                qp      = dotdict(**B.qp);
-                pp      = dotdict(**B.pp);
-                qh      = dotdict(**B.qh);
-                te      = min(te - 2, -2);
-                tm      = min(tm - 2, -2); 
+                qp      = dotdict(**B.qp)
+                pp      = dotdict(**B.pp)
+                qh      = dotdict(**B.qh)
+                te      = min(te - 2, -2)
+                tm      = min(tm - 2, -2)
+                dp      = torch.zeros_like(dp)
                 
             
             F[iE]  = Fi;
             A[iE]  = Ai;
+
+
+            print('mh: ', mh)
+            print('dp: ', torch.linalg.norm(dp.reshape((-1,)), 1))
+            print('qp: ', torch.linalg.norm(torch.cat(qp.p).reshape((-1,)), 1) )
+
+            # Check convergence 
+            if torch.linalg.norm(dp.reshape((-1,)), 1) <= tol * torch.linalg.norm(torch.cat(qp.p).reshape((-1,)), 1) and torch.linalg.norm(mh.reshape((-1,)), 1) <= tol: 
+                break 
+            if te < -8: 
+                break
 
         results    = dotdict()
         results.F  = F
