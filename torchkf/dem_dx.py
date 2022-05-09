@@ -53,6 +53,7 @@ def compute_df_d2f(func, inputs, input_keys=None) -> Tuple[dotdict, dotdict]:
     # dim 1 of H are df[i]/d(x[:]x[:])
     # dim 2 of H are df[:]/d(x[i]x[:])
     # dim 3 of H are df[:]/d(x[:]x[j])
+    # d2f is (Nf, Na, Nb)
     return df, d2f
 
 def compute_dx(f, dfdu, t, isreg=False): 

@@ -352,9 +352,9 @@ class DEMInversion:
         X = DEMInversion.generalized_coordinates(x, d) if x.shape[-1] > 0 else torch.zeros((nT, d, 0))
 
         # setup integration times
-        td = 1 / nD
-        te = 0
-        tm = 4
+        td = 1. / nD
+        te = 0.
+        tm = 4.
 
         # precision components Q requiring [Re]ML estimators (M-step)
         # -----------------------------------------------------------
@@ -478,6 +478,7 @@ class DEMInversion:
 
         # initialize arrays for hierarchical structure of x[0] and v[0]
         qu.x[0] = torch.cat([M[i].x for i in range(0, nl - 1)], axis=0).squeeze()
+        print('first:', qu.x)
         qu.v[0] = torch.cat([M[i].v for i in range(1, nl)], axis=0).squeeze()
 
         # derivatives for Jacobian of D-step 
@@ -509,7 +510,11 @@ class DEMInversion:
 
         # preclude very precise states from entering free-energy/action
         # -------------------------------------------------------------
-        # NotImplemented
+        ix = slice(ny*n + nv*n,ny*n + nv*n + nx*n)
+        iv = slice(ny*n,ny*n + nv*d)
+        je = torch.diag(Qp) < np.exp(16)
+        ju = torch.cat([je[ix], je[iv]])
+
 
         # E-step: (with) embedded D- and M-steps) 
         # =======================================
@@ -546,7 +551,7 @@ class DEMInversion:
 
                 # [re-]set states for static systems
                 # ----------------------------------
-                if not nx:
+                if nx == 0:
                     qu = qU[iT] if len(qU) > iT else qu
                 
                 # D-step: until convergence for static systems
@@ -556,6 +561,7 @@ class DEMInversion:
 
                     # sampling time 
                     # not implemented (diff: sampling time does not change with iD)
+
 
                     # derivatives of responses and inputs
                     # -----------------------------------
@@ -569,18 +575,15 @@ class DEMInversion:
                     # E = v - g(x,v) and derivatives dE.dx
                     # ====================================
                     E, dE = self.eval_error_diff(M, qu, qp)
+                    print('second:', qu.x)
+
                     log.debug(f'E: {pformat(E)}')
-                    log.debug(f'dE: {pformat(dE)}')
 
                     # conditional covariance [of states u]
                     # ------------------------------------
                     qu.p  = dE.du.T @ iS @ dE.du + Pu
-                    log.debug(f'qu.p: {pformat(qu.p)}')
-                    # qu.c  = torch.diag(ju) @ torch.linalg.inv(qu.p) @ torch.diag(ju) # todo
-                    qu.c = torch.linalg.inv(qu.p)
-                    log.debug(f'qu.c: {pformat(qu.c)}')
+                    qu.c  = torch.diag(ju.double()) @ torch.linalg.inv(qu.p) @ torch.diag(ju.double()) 
                     iqu.c = iqu.c + torch.logdet(qu.c)
-                    log.debug(f'iqu.c: {pformat(iqu.c)}')
 
 
                     # and conditional covariance [of parameters P]
@@ -595,7 +598,7 @@ class DEMInversion:
                     # save states at iT
                     if iD == 0: 
                         qE.append(E.squeeze(1))
-                        qU.append(qu) 
+                        qU.append(dotdict(**qu)) 
 
                     # uncertainty about parameters dWdv, ...
                     if nP > 0: 
@@ -625,7 +628,7 @@ class DEMInversion:
                     
                     # gradient
                     dFdu = torch.cat([dVdu.reshape((-1,)), dVdy.reshape((-1,)), dVdc.reshape((-1,))], dim=0)
-
+                    log.debug(dFdu)
                     # Jacobian (variational flow)
                     dFduu = torch.Tensor(block_matrix([[dVduu, dVduy, dVduc],
                                                        [   [], dVdyy,    []],
@@ -659,7 +662,7 @@ class DEMInversion:
                 qp.ic = qp.ic + dE.dP.T @ iS @ dE.dP
 
                 # and quantities for M-step 
-                EE   = E @ E.T + EE
+                EE  = E @ E.T + EE
                 ECE = ECE + ECEu + ECEp
 
 
@@ -689,9 +692,9 @@ class DEMInversion:
                 # update ReML extimate of parameters
                 dh = compute_dx(dFdh, dFdhh, tm, isreg=True)
 
-                dh = torch.clamp(dh, -2, 2)
+                dh   = torch.clamp(dh, -2, 2)
                 qh.h = qh.h + dh 
-                mh = mh + dh
+                mh   = mh + dh
 
                 # conditional covariance of hyperparameters 
                 qh.c = torch.linalg.inv(dFdhh)
@@ -709,9 +712,9 @@ class DEMInversion:
 
             # free-energy and action 
             # ----------------------
-            Lu = - torch.trace(iS @ EE) / 2 \
+            Lu = - torch.trace(iS[je][:, je] @ EE[je][:, je]) / 2 \
                  - n * ny * np.log(2 * np.pi) * nT / 2\
-                 + torch.logdet(iS) * nT / 2\
+                 + torch.logdet(iS[je][:, je]) * nT / 2\
                  + iqu.c / (2*nD)
 
             # Lu = - torch.trace(iS[je, je] * EE[je, je]) / 2 \
@@ -721,12 +724,12 @@ class DEMInversion:
 
             Lp = - torch.trace(qp.e.T @ pp.ic @ qp.e) / 2\
                  - torch.trace(qh.e.T @ ph.ic @ qh.e) / 2\
-                 + torch.logdet(qp.c[ip, ip] @ pp.ic) / 2\
+                 + torch.logdet(qp.c[ip][:, ip] @ pp.ic) / 2\
                  + torch.logdet(qh.c @ ph.ic) / 2
 
             La = - torch.trace(qp.e.T @ pp.ic @ qp.e) * nT / 2\
                  - torch.trace(qh.e.T @ ph.ic @ qh.e) * nT / 2\
-                 + torch.logdet(qp.c[ip, ip] @ pp.ic * nT) * nT / 2\
+                 + torch.logdet(qp.c[ip][:, ip] @ pp.ic * nT) * nT / 2\
                  + torch.logdet(qh.c @ ph.ic * nT) * nT / 2
 
             Li = Lu + Lp
@@ -737,19 +740,19 @@ class DEMInversion:
                 # Accept free-energy and save current parameter estimates
                 #--------------------------------------------------------
                 Fi      = Li;
-                te      = min(te + 1/2,4);
-                tm      = min(tm + 1/2,4);
-                B.qp    = qp;
-                B.qh    = qh;
-                B.pp    = pp;
+                te      = min(te + 1/2.,4);
+                tm      = min(tm + 1/2.,4);
+                B.qp    = dotdict(**qp);
+                B.qh    = dotdict(**qh);
+                B.pp    = dotdict(**pp);
                 
                 # E-step: update expectation (p)
                 # ==============================
                 
                 # gradients and curvatures
                 # ------------------------
-                dFdp[ip]      = dFdp[ip]  - pp.ic*(qp.e - pp.p);
-                dFdpp[ip, ip] = dFdpp[ip, ip] - pp.ic;
+                dFdp[ip]      = dFdp[ip]      - pp.ic * (qp.e - pp.p);
+                dFdpp[ip][:, ip] = dFdpp[ip][:, ip] - pp.ic;
                 
                 # update conditional expectation
                 # ------------------------------
@@ -763,9 +766,9 @@ class DEMInversion:
                 # otherwise, return to previous expansion point
                 # ---------------------------------------------
                 nM      = 1;
-                qp      = B.qp;
-                pp      = B.pp;
-                qh      = B.qh;
+                qp      = dotdict(**B.qp);
+                pp      = dotdict(**B.pp);
+                qh      = dotdict(**B.qh);
                 te      = min(te - 2, -2);
                 tm      = min(tm - 2, -2); 
                 
@@ -783,9 +786,9 @@ class DEMInversion:
         results.qH = qH
 
         qP.P       = Up @ qp.e + torch.cat([m.pE for m in M])
-        qP.C       = Up @ qp.c[ip,ip] @ Up.T
+        qP.C       = Up @ qp.c[ip][:, ip] @ Up.T
         qP.dFdp    = Up @ dFdp[ip]
-        qP.dFdpp   = Up @ dFdpp[ip,ip] @ Up.T
+        qP.dFdpp   = Up @ dFdpp[ip][:, ip] @ Up.T
 
         results.qP = qP
 
