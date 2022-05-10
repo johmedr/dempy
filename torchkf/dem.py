@@ -33,8 +33,8 @@ class DEMInversion:
         self.nl : int  = len(systems)                        # number of levels
         self.nv : int  = sum(M.m for M in self.M)            # number of v (causal states)
         self.nx : int  = sum(M.n for M in self.M)            # number of x (hidden states)
-        self.ny : int  = self.M[0].l                        # number of y (model output)
-        self.nc : int  = self.M[-1].l                         # number of c (prior causes)
+        self.ny : int  = self.M[0].l                         # number of y (model output)
+        self.nc : int  = self.M[-1].l                        # number of c (prior causes)
         self.nu : int  = self.d * self.nv + self.n * self.nx # number of generalized states
         self.logger    = logging.getLogger('[DEM]')
 
@@ -52,7 +52,7 @@ class DEMInversion:
 
         k = torch.arange(p)
         x = np.sqrt(2) * s
-        r = np.cumprod(1 - 2 * k) / (x**(2*k))
+        r = np.cumprod(1 - 2. * k) / (x**(2*k))
         S = torch.zeros((p,p))
         for i in range(p): 
             j = 2 * k - i
@@ -173,7 +173,7 @@ class DEMInversion:
             x = torch.zeros(nT, 0)
         
         Y = DEMInversion.generalized_coordinates(y, n) 
-        U = DEMInversion.generalized_coordinates(u, d) if u.shape[-1] > 0 else torch.zeros((nT, d, 0))
+        U = DEMInversion.generalized_coordinates(u, d) if u.shape[-1] > 0 else torch.zeros((nT, d, nc))
         X = DEMInversion.generalized_coordinates(x, d) if x.shape[-1] > 0 else torch.zeros((nT, d, 0))
 
         # setup integration times
@@ -411,9 +411,6 @@ class DEMInversion:
                     # E = v - g(x,v) and derivatives dE.dx
                     # ====================================
                     E, dE = dem_eval_err_diff(n, d, M, qu, qp)
-                    print('dEdu: ', dE.du)
-
-                    log.debug(f'E: {pformat(E)}')
 
                     # conditional covariance [of states u]
                     # ------------------------------------
@@ -459,11 +456,11 @@ class DEMInversion:
 
                     # conditional modes
                     # -----------------
-                    u = torch.cat([qu.x, qu.v, qu.y, qu.u], dim=1).reshape((-1,1))
+                    u = torch.cat([qu.x.reshape((-1,1)), qu.v.reshape((-1,1)), qu.y.reshape((-1,1)), qu.u.reshape((-1,1))])
 
                     # first-order derivatives
                     dVdu    = - dE.du.T @ iS @ E - dWdu/2 - Pu @ u[0:(nx+nv)*n]
-                    
+
                     # second-order derivatives
                     dVduu   = - dE.du.T @ iS @ dE.du - dWduu / 2 - Pu
                     dVduy   = - dE.du.T @ iS @ dE.dy 
@@ -483,7 +480,7 @@ class DEMInversion:
                     du    = compute_dx(f, dfdu, td)
                     q     = u + du
 
-                    qu.x = q[:n * nx].reshape((n, nx))
+                    qu.x = q[:nx * n].reshape((n, nx))
                     qu.v = q[n * nx:n * (nx + nv)].reshape((n, nv))
 
                     # ... 
