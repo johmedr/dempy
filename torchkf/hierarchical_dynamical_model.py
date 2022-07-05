@@ -38,12 +38,13 @@ class GaussianSystem(dict):
 class HierarchicalDynamicalModel:
     def __init__(self, systems: List[GaussianSystem], input_mean=None, input_cov=None):
         HierarchicalDynamicalModel.check_systems(systems)
-        self._systems = systems
-        self._n_systems = len(systems)
-        self._input_dim = systems[0]['input_dim']
-        self._obs_dim = systems[-1]['obs_dim']
+        
+        self._systems    = systems
+        self._n_systems  = len(systems)
+        self._input_dim  = systems[0]['input_dim']
+        self._obs_dim    = systems[-1]['obs_dim']
         self._input_mean = input_mean
-        self._input_cov = input_cov
+        self._input_cov  = input_cov
 
     @staticmethod
     def check_systems(systems):

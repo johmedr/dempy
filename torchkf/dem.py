@@ -40,15 +40,16 @@ class DEMInversion:
 
     @staticmethod
     def generalized_covariance(
-        p    : int,           # derivative order  
-        s    : float,         # roughness of the noise process
-        cov : bool = False   # whether to return the precision matrix 
+        p   : int,            # derivative order  
+        s   : float,          # s.d. of the noise process (1/sqrt(roughness))
+        cov : bool = False    # whether to return the precision matrix 
         ):
         """ Mimics the behavior of spm_DEM_R.m
         s is the roughtness of the noise process. 
         """
         if s == 0:
             s = np.exp(-8)
+
 
         k = torch.arange(p)
         x = np.sqrt(2) * s
@@ -165,7 +166,7 @@ class DEMInversion:
             raise ValueError(f'Last dimension of input y ({y.shape}) does not match that of deepest model cause ({M[0].l})')
 
         if u is None:
-            u = torch.zeros(nT, M[-1].l)
+            u = torch.zeros(nT, nc)
         elif u.shape[1] != nc: 
             raise ValueError(f'Last dimension of input u ({u.shape}) does not match that of deepest model cause ({M[-1].l})')
 
@@ -173,8 +174,13 @@ class DEMInversion:
             x = torch.zeros(nT, 0)
         
         Y = DEMInversion.generalized_coordinates(y, n) 
-        U = DEMInversion.generalized_coordinates(u, d) if u.shape[-1] > 0 else torch.zeros((nT, d, nc))
-        X = DEMInversion.generalized_coordinates(x, d) if x.shape[-1] > 0 else torch.zeros((nT, d, 0))
+        U = torch.zeros((nT, n, nc))
+        X = torch.zeros((nT, n, nc))
+        if u.shape[-1] > 0: 
+            U[:, :d] = DEMInversion.generalized_coordinates(u, d) 
+        if x.shape[-1] > 0:
+            X[:, :d] = DEMInversion.generalized_coordinates(x, d) 
+        else: X = torch.zeros((nT, n, 0))
 
         # setup integration times
         if td is None: 
@@ -315,8 +321,6 @@ class DEMInversion:
         qu.x[0, :] = torch.cat([M[i].x for i in range(0, nl-1)], axis=0).squeeze()
         qu.v[0, :] = torch.cat([M[i].v for i in range(1,   nl)], axis=0).squeeze()
 
-        print('first:', qu.x)
-
         # derivatives for Jacobian of D-step 
         # ----------------------------------
         Dx              = torch.kron(torch.diag(torch.ones(n-1), 1), torch.eye(nx))
@@ -419,7 +423,6 @@ class DEMInversion:
                     quc[:nu,:nu] = torch.diag(ju.double()) @ torch.linalg.inv(qu.p[:nu,:nu]) @ torch.diag(ju.double()) 
                     qu.c         = quc
                     iqu.c        = iqu.c + torch.logdet(qu.c[:nu,:nu])
-
 
                     # and conditional covariance [of parameters P]
                     # --------------------------------------------
@@ -557,11 +560,6 @@ class DEMInversion:
                  - n * ny * np.log(2 * np.pi) * nT / 2\
                  + torch.logdet(iS[je][:, je]) * nT / 2\
                  + iqu.c / (2*nD)
-
-            # Lu = - torch.trace(iS[je, je] * EE[je, je]) / 2 \
-            #      - n * ny * np.log(2 * np.pi) * nT / 2\
-            #      + torch.logdet(iS[je, je]) * nT / 2\
-            #      + iqu.c / (2*nD)
 
             Lp = - torch.trace(qp.e.T @ pp.ic @ qp.e) / 2\
                  - torch.trace(qh.e.T @ ph.ic @ qh.e) / 2\

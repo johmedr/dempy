@@ -4,7 +4,7 @@ from .dem_structs import *
 
 class GaussianModel(dotdict): 
     def __init__(self, 
-        f=None, g=None, m=None, n=None, l=None, x=None, v=None, 
+        f=None, g=None, m=None, n=None, l=None, p=None, x=None, v=None, 
         pE=None, pC=None, hE=None, hC=None, gE=None, gC=None, 
         Q=None, R=None, V=None, W=None, xP=None, vP=None, sv=None, sw=None): 
         self.f  : Callable           = f  # forward function
@@ -13,6 +13,7 @@ class GaussianModel(dotdict):
         self.m  : int                = m  # number of inputs
         self.n  : int                = n  # number of states
         self.l  : int                = l  # number of outputs
+        self.p  : int                = p  # number of parameters
 
         self.x  : torch.Tensor       = x  # explicitly specified states
         self.v  : torch.Tensor       = v  # explicitly specified inputs
@@ -52,6 +53,7 @@ class HierarchicalGaussianModel(list):
             g = len(M)
         M[-1].n = 0
         M[-1].m = 0
+        M[-1].p = 0
 
         for i in range(g): 
             # check for hidden states
@@ -74,7 +76,8 @@ class HierarchicalGaussianModel(list):
             elif len(M[i].pE.shape) == 1: 
                  M[i].pE = M[i].pE.unsqueeze(-1)
 
-            p = M[i].pE.shape[0]
+            p      = M[i].pE.shape[0]
+            M[i].p = p
 
             # and prior covariances pC
             if  M[i].pC is None:
@@ -144,19 +147,23 @@ class HierarchicalGaussianModel(list):
 
             # hidden states
             M[i].xP = torch.Tensor() if M[i].xP is None else M[i].xP
-            if sum(M[i].xP.shape) == 1: 
-                M[i].xP = torch.eye(M[i].n, M[i].n) * xP.squeeze()
+            if sum(M[i].xP.shape) == len(M[i].xP.shape): 
+                M[i].xP = torch.eye(M[i].n, M[i].n) * M[i].xP.squeeze()
             elif len(M[i].xP.shape) == 1 and M[i].xP.shape[0] == M[i].n: 
                 M[i].xP = torch.diag(M[i].xP)
+            elif len(M[i].xP.shape) > 2 or (len(M[i].xP.shape) == 2 and any(dim != M[i].n for dim in M[i].xP.shape)):
+                raise ValueError(f'Wrong shape for M[{i}].xP: expected ({M[i].n},{M[i].n}), got {M[i].xP.shape}.')
             else: 
                 M[i].xP = torch.zeros((M[i].n, M[i].n))
 
             # hidden causes
             M[i].vP = torch.Tensor() if M[i].vP is None else M[i].vP
-            if sum(M[i].vP.shape) == 1: 
-                M[i].vP = torch.eye(M[i].n, M[i].n) * vP.squeeze()
+            if sum(M[i].vP.shape) == len(M[i].vP.shape):   
+                M[i].vP = torch.eye(M[i].n, M[i].n) * M[i].vP.squeeze()
             elif len(M[i].vP.shape) == 1 and M[i].vP.shape[0] == M[i].n: 
                 M[i].vP = torch.diag(M[i].vP)
+            elif len(M[i].vP.shape) > 2 or (len(M[i].vP.shape) == 2 and any(dim != M[i].n for dim in M[i].vP.shape)):
+                raise ValueError(f'Wrong shape for M[{i}].vP: expected ({M[i].n},{M[i].n}), got {M[i].vP.shape}.')
             else: 
                 M[i].vP = torch.zeros((M[i].n, M[i].n))
 
@@ -169,10 +176,11 @@ class HierarchicalGaussianModel(list):
         # -----------------------------------------------------------
         pP = 1
         for i in range(g):
-            M[i].Q = []
-            M[i].R = []
-            M[i].V = torch.Tensor()
-            M[i].W = torch.Tensor()
+
+            M[i].Q = [] if M[i].Q is None else M[i].Q
+            M[i].R = [] if M[i].R is None else M[i].R
+            M[i].V = torch.Tensor() if M[i].V is None else M[i].V
+            M[i].W = torch.Tensor() if M[i].W is None else M[i].W
 
             # check hyperpriors (expectation)
             M[i].hE = torch.zeros((len(M[i].Q), 1)) if M[i].hE is None or sum(M[i].hE.shape) == 0 else M[i].hE
@@ -229,7 +237,7 @@ class HierarchicalGaussianModel(list):
                 M[i].V = torch.diag(M[i].V)
             elif len(M[i].V) != M[i].l:
                 try: 
-                    M[i].V = torch.eye(M[i].l) * M[i].V[0]   
+                    M[i].V = torch.eye(M[i].l) * M[i].V[0]
                 except:
                     if len(M[i].hE) == 0:
                         M[i].V = torch.eye(M[i].l)
