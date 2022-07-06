@@ -61,6 +61,7 @@ def compute_dx(f, dfdx, t, isreg=False):
         f = f.unsqueeze(-1)
     if isreg:
         t  = np.exp(t - torch.logdet(dfdx)/f.shape[0])
+        print('reg: ' ,t)
     if f.shape[0] != dfdx.shape[0]: 
         raise ValueError(f'Shape mismatch: first dim of f {f.shape} must match that of df/dx {dfdx.shape}.')
     if len(f) == len(dfdx) == 0:

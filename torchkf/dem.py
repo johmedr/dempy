@@ -7,6 +7,7 @@ import logging
 from pprint import pformat
 from tqdm import tqdm
 from .dem_de import *
+from .dem_z  import *
 
 
 logging.basicConfig()
@@ -93,20 +94,26 @@ class DEMInversion:
         for t in times: 
             start = int(t - (p) / 2)
             end = start + p
-            if start < 0: 
-                slices.append(slice(0, p))
-            elif end > n_times:
-                slices.append(slice(n_times - (p), n_times))
-            else: 
-                slices.append(slice(start, end))
 
-        series_slices = torch.stack([x[_slice] for _slice in slices], dim=0)
+            if start < 0: 
+                X = torch.cat((- start) * [x[0, None]] + [x[0:end]])
+            elif end > n_times:
+                X = torch.cat([x[start:n_times]] + (end - n_times) * [x[-1, None]])
+            else: 
+                X = x[start:end]
+
+            X = T @ X 
+            slices.append(X)
+
+
+        slices = torch.stack(slices, dim=0)
 
         # series_slices is (n_times, order + 1, dim)
         # T is ( order+1, order+1)
-        generalized_coordinates = series_slices.swapaxes(1, 2) @ T.T
+        # generalized_coordinates = slices.swapaxes(1, 2) @ T.T
 
-        return generalized_coordinates.swapaxes(1, 2)
+        # return generalized_coordinates.swapaxes(1, 2)
+        return slices
 
 
     def run(self, 
@@ -572,12 +579,12 @@ class DEMInversion:
                  + torch.logdet(qh.c @ ph.ic * nT) * nT / 2
 
 
-            print(iqu.c)
-            print(torch.logdet(iS[je][:, je]))
-            print(torch.trace(iS[je][:, je] @ EE[je][:, je]))
+            # print(iqu.c)
+            # print(torch.logdet(iS[je][:, je]))
+            # print(torch.trace(iS[je][:, je] @ EE[je][:, je]))
             Li = Lu + Lp
             Ai = Lu + La 
-            print('Fi: ', Fi)
+            # print('Fi: ', Fi)
             print('Li: ', Li)
             print('Ai: ', Ai)
 
@@ -591,7 +598,10 @@ class DEMInversion:
                 B.qp    = dotdict(**qp)
                 B.qh    = dotdict(**qh)
                 B.pp    = dotdict(**pp)
-                
+                print('Fi: ', Li)
+
+                ## TODO : PB with loop ? 
+
                 # E-step: update expectation (p)
                 # ==============================
                 
@@ -602,7 +612,7 @@ class DEMInversion:
                 
                 # update conditional expectation
                 # ------------------------------
-                dp      = compute_dx(dFdp,dFdpp,te, isreg=True) 
+                dp      = compute_dx(dFdp, dFdpp, te, isreg=True) 
                 qp.e    = qp.e + dp[ip]
                 qp.p    = list()
                 npi     = 0
@@ -656,5 +666,146 @@ class DEMInversion:
 
         results.qU = dotdict({k: torch.stack([qU[i][k] for i in range(len(qU))], dim=0) for k in qU[0].keys()})
         results.qE = qE
+
+        return results
+
+    def generate(self, nT, u=None): 
+        n  = self.n                 # Derivative order
+        M  = self.M
+        nl = len(M)                 # Number of levels
+        nx = sum(m.n for m in M)    # Number of states
+        nv = sum(m.l for m in M)    # Number of outputs
+
+        z, w  = dem_z(M, nT)
+        # inputs are integrated as random innovations
+        if u is not None: 
+            z[-1] = u + z[-1]
+
+        Z    = [DEMInversion.generalized_coordinates(zi, n).unsqueeze(-1) for zi in z]
+        W    = [DEMInversion.generalized_coordinates(wi, n).unsqueeze(-1) for wi in w]
+        X    = torch.zeros((nT, n, nx, 1))
+        V    = torch.zeros((nT, n, nv, 1))
+
+        # Setup initial conditions
+        X[0, 0] = torch.cat([m.x for m in M if m.n > 0], dim=0)
+        V[0, 0] = torch.cat([m.v for m in M if m.l > 0], dim=0)
+
+        # Derivatives operators
+        Dx = torch.kron(torch.diag(torch.ones(n-1), 1), torch.eye(nx));
+        Dv = torch.kron(torch.diag(torch.ones(n-1), 1), torch.eye(nv));
+        D  = torch.block_diag(Dv, Dx, Dv, Dx)
+        dfdw  = torch.kron(torch.eye(n),torch.eye(nx));
+
+        xt = X[0]
+        vt = V[0]
+        for t in range(nT - 1):     
+            # Unpack state
+            zi = [_[t] for _ in Z]
+            wi = [_[t] for _ in W] 
+
+            # Unvec states
+            nxi = 0
+            nvi = 0
+            xi  = []
+            vi  = []
+            dfdx = cell(nl, nl)
+            dfdv = cell(nl, nl)
+            dgdx = cell(nl, nl)
+            dgdv = cell(nl, nl)
+            for i in range(nl): 
+                xi.append(xt[:, nxi:nxi + M[i].n])
+                vi.append(vt[:, nvi:nvi + M[i].l])
+                
+                nxi = nxi + M[i].n
+                nvi = nvi + M[i].l
+                
+                # Fill cells 
+                dfdx[i, i] = torch.zeros((M[i].n, M[i].n))
+                dfdv[i, i] = torch.zeros((M[i].n, M[i].l))
+                dgdx[i, i] = torch.zeros((M[i].l, M[i].n))
+                dgdv[i, i] = torch.zeros((M[i].l, M[i].l))
+                
+            f   = []
+            g   = []
+            df  = []
+            dg  = []
+            
+            # Run in descending order
+            vi[-1][0] = zi[-1][0] 
+            for i in range(nl - 1)[::-1]: 
+                p = M[i].pE 
+                
+                # compute functions
+                fi = M[i].f(xi[i][0], vi[i + 1][0], p)
+                gi = M[i].g(xi[i][0], vi[i + 1][0], p)
+                
+                xv = tuple(_ if sum(_.shape) > 0 else torch.Tensor([]) for _ in  (xi[i][0], vi[i+1][0]))
+                
+                # compute derivatives
+                dfi, _ = compute_df_d2f(lambda x, v: M[i].f(x, v, M[i].pE), xv, ['dx', 'dv'])
+                dgi, _ = compute_df_d2f(lambda x, v: M[i].g(x, v, M[i].pE), xv, ['dx', 'dv']) 
+                
+                # g(x, v) && f(x, v)
+                vi[i][0] = gi + zi[i][0]
+                f.append(fi)
+                g.append(gi)
+                
+                # and partial derivatives
+                dfdx[i,     i] = dfi.dx
+                dfdv[i, i + 1] = dfi.dv
+                dgdx[i,     i] = dgi.dx
+                dgdv[i, i + 1] = dgi.dv
+                
+                df.append(dfi)
+                dg.append(dgi)
+            
+            f = torch.cat(f)
+            g = torch.cat(g)
+            
+            dfdx = torch.tensor(block_matrix(dfdx))
+            dfdv = torch.tensor(block_matrix(dfdv))
+            dgdx = torch.tensor(block_matrix(dgdx))
+            dgdv = torch.tensor(block_matrix(dgdv))
+            
+            v = torch.cat(vi, dim=1)
+            x = torch.zeros((n, nx, 1)) 
+
+            z = torch.cat(zi, 1)
+            w = torch.cat(wi, 1)
+
+            x[1, :] = f + w[0]
+
+            # compute higher orders
+            for i in range(1, n-1): 
+                v[i]   = dgdx @ x[i] + dgdv @ v[i] + z[i]
+                x[i+1] = dfdx @ x[i] + dfdv @ v[i] + w[i]
+            
+            dgdv = torch.kron(torch.diag(torch.ones(n-1),1), dgdv)
+            dgdx = torch.kron(torch.diag(torch.ones(n-1),1), dgdx)
+            dfdv = torch.kron(torch.eye(n), dfdv)
+            dfdx = torch.kron(torch.eye(n), dfdx)
+            
+            J    = torch.tensor(block_matrix([
+                [dgdv, dgdx,   Dv,   []] , 
+                [dfdv, dfdx,   [], dfdw],  
+                [[],     [],   Dv,   []],  
+                [[],     [],   [],   Dx]   
+            ])) 
+            
+            u  = torch.cat([v.reshape((-1,)), x.reshape((-1,)), z.reshape((-1,)), w.reshape((-1,))]).unsqueeze(-1)
+            du = compute_dx(D @ u, J, 1)
+            u  = u + du
+            
+            vt   = u[:v.shape[0] * v.shape[1]].reshape(v.shape)
+            xt   = u[ v.shape[0] * v.shape[1]:v.shape[0] * v.shape[1] + x.shape[0] * x.shape[1]].reshape(x.shape)
+
+            V[t] = vt
+            X[t] = xt
+            
+        results   = dotdict()
+        results.v = V
+        results.x = X
+        results.z = torch.cat(Z, dim=2) 
+        results.w = torch.cat(W, dim=2)
 
         return results
