@@ -5,7 +5,7 @@ import numpy as np
 from itertools import chain
 import logging
 from pprint import pformat
-from tqdm import tqdm
+from tqdm.autonotebook import tqdm
 import pprint
 from .dem_de import *
 from .dem_z  import *
@@ -367,6 +367,12 @@ class DEMInversion:
         if nh == 0: nM = 1
         if nf == 0 and nh == 0: nE = 1
 
+        # prepare progress bars 
+        # ---------------------
+        if nE > 1: Ebar = tqdm(desc='  E-step', total=nE)
+        if nM > 1: Mbar = tqdm(desc='  M-step', total=nM)
+        Tbar = tqdm(desc='timestep', total=nT)
+
         # preclude very precise states from entering free-energy/action
         # -------------------------------------------------------------
         ix = slice(ny*n + nv*n,ny*n + nv*n + nx*n)
@@ -378,7 +384,11 @@ class DEMInversion:
         # E-step: (with) embedded D- and M-steps) 
         # =======================================
         Fi = - np.inf
+        if nE > 1:
+            Ebar.reset()
+
         for iE in range(nE): 
+
             # [re-]set accumulators for E-step 
             # --------------------------------
             dFdh  = torch.zeros(nh, 1)
@@ -405,7 +415,12 @@ class DEMInversion:
 
             # D-step: (nD D-steps for each sample) 
             # ====================================
+            Tbar.reset()
             for iT in range(nT): 
+                # update progress bar
+                # -------------------
+                Tbar.update()
+                Tbar.refresh()
 
                 # [re-]set states for static systems
                 # ----------------------------------
@@ -493,7 +508,6 @@ class DEMInversion:
                     # print('... - Pu @ u[0:(nx+nv)*n]: ', - Pu @ u[0:(nx+nv)*n])
 
 
-
                     # second-order derivatives
                     dVduu   = - dE.du.T @ iS @ dE.du - dWduu / 2 - Pu
                     dVduy   = - dE.du.T @ iS @ dE.dy 
@@ -541,6 +555,8 @@ class DEMInversion:
 
             # M-step - optimize hyperparameters (mh = total update)
             mh = torch.zeros(nh)
+            if nM > 1: 
+                Mbar.reset()
             for iM in range(nM): 
                 # [re-]set precisions using ReML hyperparameter estimates
                 iS    = Qp + sum(Q[i] * np.exp(qh.h[i]) for i in range(nh))
@@ -577,6 +593,12 @@ class DEMInversion:
                 if nh > 0 and (((dFdh.T @ dh).squeeze() < tol) or torch.linalg.norm(dh, 1) < tol): 
                     break
 
+                if nM > 1: 
+                    # update progress bar
+                    # -------------------
+                    Mbar.update()
+                    Mbar.refresh()
+
             # conditional precision of parameters
             # -----------------------------------
             qp.ic[ip, ip] = qp.ic[ip, ip] + pp.ic
@@ -610,8 +632,8 @@ class DEMInversion:
             Ai = Lu + La 
             # print('Fi: ', Fi)
 
-            print('Li: ', Li)
-            print('Ai: ', Ai)
+            log.info(f'Li: {Li}')
+            log.info(f'Ai: {Ai}')
             if Li == -np.inf: 
                 print('Lu: ', Lu)
                 print('... - torch.trace(iS[je][:, je] @ EE[je][:, je]) / 2', (- torch.trace(iS[je][:, je] @ EE[je][:, je]) / 2).item())
@@ -674,15 +696,24 @@ class DEMInversion:
             F[iE]  = Fi;
             A[iE]  = Ai;
 
-            print('mh: ', mh)
-            print('dp: ', torch.linalg.norm(dp.reshape((-1,)), 1))
-            print('qp: ', torch.linalg.norm(torch.cat(qp.p).reshape((-1,)), 1) )
+
+            log.info(f'Li: {Li}')
+            log.info(f'Ai: {Ai}')
+            # print('mh: ', mh)
+            # print('dp: ', torch.linalg.norm(dp.reshape((-1,)), 1))
+            # print('qp: ', torch.linalg.norm(torch.cat(qp.p).reshape((-1,)), 1) )
 
             # Check convergence 
             if torch.linalg.norm(dp.reshape((-1,)), 1) <= tol * torch.linalg.norm(torch.cat(qp.p).reshape((-1,)), 1) and torch.linalg.norm(mh.reshape((-1,)), 1) <= tol: 
                 break 
             if te < -8: 
                 break
+
+            # update progress bar
+            # -------------------
+            if nE > 1:
+                Ebar.update()
+                Ebar.refresh()
 
         results    = dotdict()
         results.F  = F
