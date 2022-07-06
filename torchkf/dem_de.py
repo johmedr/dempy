@@ -6,7 +6,7 @@ from typing import List
 from pprint import pprint
 
 
-def dem_eval_err_diff(n: int, d: int, M: List[HierarchicalGaussianModel], qu: dotdict, qp: dotdict): 
+def dem_eval_err_diff(n: int, d: int, M: HierarchicalGaussianModel, qu: dotdict, qp: dotdict): 
         # Get dimensions
         # ==============
         nl = len(M)
@@ -48,8 +48,8 @@ def dem_eval_err_diff(n: int, d: int, M: List[HierarchicalGaussianModel], qu: do
                 raise RuntimeError(f"Error while evaluating model[{i}].g!")
             g.append(res)
 
-        f = torch.cat(f)
-        g = torch.cat(g)
+        f = torch.cat(f).reshape((nx,))
+        g = torch.cat(g).reshape((ne - nc,))
 
         # Evaluate derivatives at each level
         df  = list()
@@ -58,18 +58,20 @@ def dem_eval_err_diff(n: int, d: int, M: List[HierarchicalGaussianModel], qu: do
         d2g = list()
         for i in range(nl - 1): 
             xvp = tuple(_ if sum(_.shape) > 0 else torch.Tensor([]) for _ in  (x[i], v[i], qp.p[i], qp.u[i], M[i].pE))
-            ### TODO: ERROR HERE ? q/u/p extracted to dp, du, dq 
 
             dfi, d2fi = compute_df_d2f(lambda x, v, q, u, p: M[i].f(x, v, p + u @ q), xvp, ['dx', 'dv', 'dp', 'du', 'dq'])
             dgi, d2gi = compute_df_d2f(lambda x, v, q, u, p: M[i].g(x, v, p + u @ q), xvp, ['dx', 'dv', 'dp', 'du', 'dq']) 
 
-            df .append( dfi)
+            dg.append(dgi)
+            df.append(dfi)
+
             d2f.append(d2fi)
-            dg .append( dgi)
             d2g.append(d2gi)
 
+        # Setup df
         df = dotdict({k: torch.block_diag(*(dfi[k] for dfi in df)) for k in ['dx', 'dv', 'dp']}) 
 
+        # Setup dgdv manually 
         dgdv = cell(nl, nl-1)
         for i in range(nl - 1): 
             # causes (level i) appear at level i in g(x[i],v[i]) and at level i+1 as -I
@@ -79,31 +81,79 @@ def dem_eval_err_diff(n: int, d: int, M: List[HierarchicalGaussianModel], qu: do
 
         dgdv = torch.tensor(block_matrix(dgdv))
 
+        # Setup dg
         dg = dotdict({k: torch.block_diag(*(dgi[k] for dgi in dg)) for k in ['dx', 'dp']}) 
         # add an extra row to accomodate the highest hierarchical level
         for k in dg.keys():
             dg[k] = torch.cat([dg[k], torch.zeros(nc, dg[k].shape[1])], dim=0)
         dg.dv = dgdv
 
+        # Reshape df and dg to avoid errors laters
+        df.dx = df.dx.reshape((nx, nx))
+        df.dv = df.dv.reshape((nx, nv))
+        df.dp = df.dp.reshape((nx, np))
+        dg.dx = dg.dx.reshape((ne, nx))
+        dg.dv = dg.dv.reshape((ne, nv))
+        dg.dp = dg.dp.reshape((ne, np))
+
+
+        # Process d2f, d2g
         d2f = dotdict({i: dotdict({j: [d2fk[i][j] for d2fk in d2f] for j in ['dx', 'dv', 'dp']}) for i in ['dx', 'dv', 'dp']})
         d2g = dotdict({i: dotdict({j: [d2gk[i][j] for d2gk in d2g] for j in ['dx', 'dv', 'dp']}) for i in ['dx', 'dv', 'dp']}) 
 
-        dfdxp = torch.stack([torch.block_diag(*(_[:, ip] for _ in d2f.dp.dx)) for ip in range(np)], dim=0)
-        dfdvp = torch.stack([torch.block_diag(*(_[:, ip] for _ in d2f.dp.dv)) for ip in range(np)], dim=0)
 
-        dfdpx = torch.stack([torch.block_diag(*(_[:, ix] for _ in d2f.dx.dp)) for ix in range(nx)], dim=0)
-        dfdpv = torch.stack([torch.block_diag(*(_[:, iv] for _ in d2f.dv.dp)) for iv in range(nv)], dim=0)
+        if np > 0:
+            dfdxp = torch.stack([torch.block_diag(*(_[:, ip] for _ in d2f.dp.dx if torch.numel(_) > 0)) for ip in range(np)], dim=0)
+            dfdvp = torch.stack([torch.block_diag(*(_[:, ip] for _ in d2f.dp.dv if torch.numel(_) > 0)) for ip in range(np)], dim=0)
+
+            dgdvp = torch.stack([torch.block_diag(*(_[:, ip] for _ in d2g.dp.dv if torch.numel(_) > 0)) for ip in range(np)], dim=0)
+            dgdxp = torch.stack([torch.block_diag(*(_[:, ip] for _ in d2g.dp.dx if torch.numel(_) > 0)) for ip in range(np)], dim=0)
+
+            dgdxp = [torch.block_diag(*(_[:, ip] for _ in d2g.dp.dx if torch.numel(_) > 0)) for ip in range(np)]
+            dgdvp = [torch.block_diag(*(_[:, ip] for _ in d2g.dp.dv if torch.numel(_) > 0)) for ip in range(np)]
+
+            # Add a component with nc rows to accomodate the highest hierarchical level
+            dgdxp = torch.stack([torch.cat([dgdxpi, torch.zeros(nc, dgdxpi.shape[1])]) for dgdxpi in dgdxp], dim=0)
+            dgdvp = torch.stack([torch.cat([dgdvpi, torch.zeros(nc, dgdvpi.shape[1])]) for dgdvpi in dgdvp], dim=0)
+
+            dfdxp = dfdxp.reshape((np, nx, nx))
+            dfdvp = dfdvp.reshape((np, nx, nv))
+            dgdxp = dgdxp.reshape((np, ne, nx))
+            dgdvp = dgdvp.reshape((np, ne, nv))
+        else: 
+            dfdxp = torch.empty((np, nx, nx))
+            dfdvp = torch.empty((np, nx, nv))
+            dgdxp = torch.empty((np, ne, nx))
+            dgdvp = torch.empty((np, ne, nv))
+
+        if nx > 0: 
+            dfdpx = torch.stack([torch.block_diag(*(_[:, ix] for _ in d2f.dx.dp if torch.numel(_) > 0)) for ix in range(nx)], dim=0)
+            dgdpx = [torch.block_diag(*(_[:, ix] for _ in d2g.dx.dp if torch.numel(_) > 0)) for ix in range(nx)]
+
+            # Add a component with nc rows to accomodate the highest hierarchical level
+            dgdpx = torch.stack([torch.cat([dgdpxi, torch.zeros(nc, dgdpxi.shape[1])]) for dgdpxi in dgdpx], dim=0)
+
+            dfdpx = dfdpx.reshape((nx, nx, np))
+            dgdpx = dgdpx.reshape((nx, ne, np))
+        else: 
+            dfdpx = torch.empty((nx, nx, np))
+            dgdpx = torch.empty((nx, ne, np))
+
+        if nv > 0: 
+            dfdpv = torch.stack([torch.block_diag(*(_[:, iv] for _ in d2f.dv.dp if torch.numel(_) > 0)) for iv in range(nv)], dim=0)
+            dgdpv = [torch.block_diag(*(_[:, iv] for _ in d2g.dv.dp if torch.numel(_) > 0)) for iv in range(nv)]
+
+            # Add a component with nc rows to accomodate the highest hierarchical level
+            dgdpv = torch.stack([torch.cat([dgdpvi, torch.zeros(1, dgdpvi.shape[1])]) for dgdpvi in dgdpv], dim=0)
+
+            dfdpv = dfdpv.reshape((nv, nx, np))
+            dgdpv = dgdpv.reshape((nv, ne, np))
+        else: 
+            dfdpv = torch.empty((nv, nx, np))
+            dgdpv = torch.empty((nv, ne, np))
+        
+
         dfdpu = torch.cat([dfdpx, dfdpv], dim=0)
-
-        dgdxp = [torch.block_diag(*(_[:, ip] for _ in d2g.dp.dx)) for ip in range(np)]
-        dgdxp = torch.stack([torch.cat([dgdxpi, torch.zeros(1, dgdxpi.shape[1])]) for dgdxpi in dgdxp], dim=0)
-        dgdvp = [torch.block_diag(*(_[:, ip] for _ in d2g.dp.dv)) for ip in range(np)]
-        dgdvp = torch.stack([torch.cat([dgdvpi, torch.zeros(1, dgdvpi.shape[1])]) for dgdvpi in dgdvp], dim=0)
-
-        dgdpx = [torch.block_diag(*(_[:, ix] for _ in d2g.dx.dp)) for ix in range(nx)]
-        dgdpx = torch.stack([torch.cat([dgdpxi, torch.zeros(1, dgdpxi.shape[1])]) for dgdpxi in dgdpx], dim=0)
-        dgdpv = [torch.block_diag(*(_[:, iv] for _ in d2g.dv.dp)) for iv in range(nv)]
-        dgdpv = torch.stack([torch.cat([dgdpvi, torch.zeros(1, dgdpvi.shape[1])]) for dgdpvi in dgdpv], dim=0)
         dgdpu = torch.cat([dgdpx, dgdpv], dim=0)
 
         de    = dotdict(
@@ -114,14 +164,7 @@ def dem_eval_err_diff(n: int, d: int, M: List[HierarchicalGaussianModel], qu: do
         # Prediction error (E) - causes        
         Ev = [torch.cat([qu.y[0], qu.v[0]]) -  torch.cat([g, qu.u[0]])]
         for i in range(1, n):
-            try: 
-                Evi = de.dy @ qu.y[i] + de.dc @ qu.u[i] - dg.dx @ qu.x[i] - dg.dv @ qu.v[i]
-            except:
-                print('de.dy @ qu.y[i] with:', de.dy.shape, qu.y[i].shape)
-                print('de.dc @ qu.u[i] with:', de.dc.shape, qu.u[i].shape)
-                print('dg.dx @ qu.x[i] with:', dg.dx.shape, qu.x[i].shape)
-                print('dg.dv @ qu.v[i] with:', dg.dv.shape, qu.v[i].shape)
-                raise
+            Evi = de.dy @ qu.y[i] + de.dc @ qu.u[i] - dg.dx @ qu.x[i] - dg.dv @ qu.v[i]
             Ev.append(Evi)
 
         # Prediction error (E) - states
@@ -135,10 +178,10 @@ def dem_eval_err_diff(n: int, d: int, M: List[HierarchicalGaussianModel], qu: do
         Ex = torch.cat(Ex)
         E  = torch.cat([Ev, Ex]).unsqueeze(1) 
 
-
         # generalised derivatives
         dgdp = [dg.dp]
         dfdp = [df.dp]
+
         qux = qu.x.unsqueeze(-1)
         quv = qu.v.unsqueeze(-1)
         for i in range(1, n):

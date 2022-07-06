@@ -6,6 +6,7 @@ from itertools import chain
 import logging
 from pprint import pformat
 from tqdm import tqdm
+import pprint
 from .dem_de import *
 from .dem_z  import *
 
@@ -25,12 +26,16 @@ class DEMInversion:
     def __init__(self, 
                  systems: HierarchicalGaussianModel, 
                  states_embedding_order: int = 4, 
-                 causes_embedding_order: int = 4): 
+                 causes_embedding_order: int = None): 
         # DEMInversion.check_systems(systems)
 
         self.M  : List = systems                             # systems, from upper-most to lower-most
         self.n  : int  = states_embedding_order + 1          # embedding order of states
-        self.d  : int  = causes_embedding_order + 1          # embedding order of causes
+        if causes_embedding_order is not None:
+            self.d  : int  = causes_embedding_order + 1      # embedding order of causes
+        else: 
+            self.d  : int  = self.n                          # embedding order of causes
+
         self.nl : int  = len(systems)                        # number of levels
         self.nv : int  = sum(M.m for M in self.M)            # number of v (causal states)
         self.nx : int  = sum(M.n for M in self.M)            # number of x (hidden states)
@@ -70,7 +75,8 @@ class DEMInversion:
     @staticmethod
     def generalized_coordinates(
         x    : torch.Tensor,    # timeseries
-        p    : int,             # embedding order
+        p    : int,             # embedding order,
+        dt   : int = 1          # sampling interval
         ):
         """ series: torch tensor (n_times, dim) 
             inspired from spm_DEM_embed.m
@@ -79,12 +85,12 @@ class DEMInversion:
         n_times, dim = x.shape
         E = torch.zeros((p, p)).double() 
         x = torch.DoubleTensor(x)
-        times = torch.arange(n_times)
+        times = torch.arange(1, n_times + 1)
 
         # Create E_ij(t) (note that indices start at 0) 
         for i in range(p): 
             for j in range(p): 
-                E[i, j] = float((i + 1 - int((p) / 2))**(j) / np.math.factorial(j))
+                E[i, j] = float((i + 1 - int(p / 2) * dt)**(j) / np.math.factorial(j))
 
         # Compute T
         T = torch.linalg.inv(E)
@@ -92,7 +98,7 @@ class DEMInversion:
         # Compute the slices
         slices = []
         for t in times: 
-            start = int(t - (p) / 2)
+            start = t - int(p / 2)
             end = start + p
 
             if start < 0: 
@@ -141,6 +147,7 @@ class DEMInversion:
         nc : int                        = self.nc       # number of c (prior causes)
         nu : int                        = self.nu       # number of generalized states
         nT : int                        = y.shape[0]    # number of timesteps
+        dt : float                      = self.M.dt     # sampling interval
 
         if ny != y.shape[1]: raise ValueError('Output dimension mismatch.')
 
@@ -180,13 +187,13 @@ class DEMInversion:
         if x is None:
             x = torch.zeros(nT, 0)
         
-        Y = DEMInversion.generalized_coordinates(y, n) 
+        Y = DEMInversion.generalized_coordinates(y, n, dt) 
         U = torch.zeros((nT, n, nc))
         X = torch.zeros((nT, n, nc))
         if u.shape[-1] > 0: 
-            U[:, :d] = DEMInversion.generalized_coordinates(u, d) 
+            U[:, :d] = DEMInversion.generalized_coordinates(u, d, dt) 
         if x.shape[-1] > 0:
-            X[:, :d] = DEMInversion.generalized_coordinates(x, d) 
+            X[:, :d] = DEMInversion.generalized_coordinates(x, d, dt) 
         else: X = torch.zeros((nT, n, 0))
 
         # setup integration times
@@ -258,7 +265,7 @@ class DEMInversion:
         Pv              =   torch.zeros(n*nv,n*nv)
         Pv[:d*nv,:d*nv] =   torch.kron(DEMInversion.generalized_covariance(d, 0), torch.zeros(nv, nv))
         Pu              =   torch.block_diag(Px, Pv)
-        Pu[:nu,:nu]    +=   torch.eye(nu, nu) * nu * np.finfo(np.float64).eps
+        Pu[:nu,:nu]     =   Pu[:nu,:nu] + torch.eye(nu, nu) * nu * np.finfo(np.float32).eps
 
         iqu             =   dotdict()
 
@@ -325,8 +332,11 @@ class DEMInversion:
         qu.u = torch.zeros(n, nc)
 
         # initialize arrays for hierarchical structure of x[0] and v[0]
-        qu.x[0, :] = torch.cat([M[i].x for i in range(0, nl-1)], axis=0).squeeze()
-        qu.v[0, :] = torch.cat([M[i].v for i in range(1,   nl)], axis=0).squeeze()
+        if nx > 0: 
+            qu.x[0, :] = torch.cat([M[i].x for i in range(0, nl-1)], axis=0).squeeze()
+
+        if nv > 0: 
+            qu.v[0, :] = torch.cat([M[i].v for i in range(1,   nl)], axis=0).squeeze()
 
         # derivatives for Jacobian of D-step 
         # ----------------------------------
@@ -429,7 +439,10 @@ class DEMInversion:
                     quc          = torch.zeros((nv+nx)*n, (nv+nx)*n)
                     quc[:nu,:nu] = torch.diag(ju.double()) @ torch.linalg.inv(qu.p[:nu,:nu]) @ torch.diag(ju.double()) 
                     qu.c         = quc
-                    iqu.c        = iqu.c + torch.logdet(qu.c[:nu,:nu])
+                    # differs from spm_DEM: we use ju to select components of quc that are not very precise
+                    # otherwise, some rows and cols of quc are set to 0, and therefore the det is 0
+                    # In SPM, this is done internally by spm_logdet 
+                    iqu.c        = iqu.c + torch.logdet(quc[ju][:, ju]) 
 
                     # and conditional covariance [of parameters P]
                     # --------------------------------------------
@@ -444,10 +457,10 @@ class DEMInversion:
                     if iD == 0: 
                         if iE == 0:
                             qE.append(E.squeeze(1))
-                            qU.append(dotdict(**qu)) 
+                            qU.append(dotdict({k: v.clone() for k, v in qu.items()})) 
                         else: 
                             qE[iT] = E.squeeze(1)
-                            qU[iT] = dotdict(**qu) 
+                            qU[iT] = dotdict({k: v.clone() for k, v in qu.items()})
 
                     # uncertainty about parameters dWdv, ...
                     if nP > 0: 
@@ -467,9 +480,10 @@ class DEMInversion:
                     # conditional modes
                     # -----------------
                     u = torch.cat([qu.x.reshape((-1,1)), qu.v.reshape((-1,1)), qu.y.reshape((-1,1)), qu.u.reshape((-1,1))])
-
+                    print('u: ', u)
                     # first-order derivatives
                     dVdu    = - dE.du.T @ iS @ E - dWdu/2 - Pu @ u[0:(nx+nv)*n]
+                    print('dVdu: ', dVdu)
 
                     # second-order derivatives
                     dVduu   = - dE.du.T @ iS @ dE.du - dWduu / 2 - Pu
@@ -490,10 +504,11 @@ class DEMInversion:
                     du    = compute_dx(f, dfdu, td)
                     q     = u + du
 
+                    # ... and save them 
                     qu.x = q[:nx * n].reshape((n, nx))
                     qu.v = q[n * nx:n * (nx + nv)].reshape((n, nv))
 
-                    # ... 
+                    # ommit part for static models
 
                 # Gradients and curvatures for E-step 
 
@@ -585,8 +600,22 @@ class DEMInversion:
             Li = Lu + Lp
             Ai = Lu + La 
             # print('Fi: ', Fi)
+
             print('Li: ', Li)
             print('Ai: ', Ai)
+            if Li == -np.inf: 
+                print('Lu: ', Lu)
+                print('... - torch.trace(iS[je][:, je] @ EE[je][:, je]) / 2', (- torch.trace(iS[je][:, je] @ EE[je][:, je]) / 2).item())
+                print('... - n * ny * np.log(2 * np.pi) * nT / 2', (- n * ny * np.log(2 * np.pi) * nT / 2).item())
+                print('... + torch.logdet(iS[je][:, je]) * nT / 2',  (torch.logdet(iS[je][:, je]) * nT / 2).item())
+                print('... + iqu.c / (2*nD)', (iqu.c / (2*nD)).item())
+
+
+                print('Lp: ', Lp)
+                print('...  - torch.trace(qp.e.T @ pp.ic @ qp.e) / 2',  - torch.trace(qp.e.T @ pp.ic @ qp.e) / 2)
+                print('...  - torch.trace(qh.e.T @ ph.ic @ qh.e) / 2',  - torch.trace(qh.e.T @ ph.ic @ qh.e) / 2)
+                print('...  + torch.logdet(qp.c[ip][:, ip] @ pp.ic) / 2', torch.logdet(qp.c[ip][:, ip] @ pp.ic) / 2)
+                print('...  + torch.logdet(qh.c @ ph.ic) / 2',  torch.logdet(qh.c @ ph.ic) / 2)
 
             # if F is increasng save expansion point and derivatives 
             if Li > Fi or iE < 1: 
@@ -598,7 +627,6 @@ class DEMInversion:
                 B.qp    = dotdict(**qp)
                 B.qh    = dotdict(**qh)
                 B.pp    = dotdict(**pp)
-                print('Fi: ', Li)
 
                 ## TODO : PB with loop ? 
 
@@ -637,7 +665,6 @@ class DEMInversion:
             F[iE]  = Fi;
             A[iE]  = Ai;
 
-
             print('mh: ', mh)
             print('dp: ', torch.linalg.norm(dp.reshape((-1,)), 1))
             print('qp: ', torch.linalg.norm(torch.cat(qp.p).reshape((-1,)), 1) )
@@ -672,6 +699,7 @@ class DEMInversion:
     def generate(self, nT, u=None): 
         n  = self.n                 # Derivative order
         M  = self.M
+        dt = self.M.dt
         nl = len(M)                 # Number of levels
         nx = sum(m.n for m in M)    # Number of states
         nv = sum(m.l for m in M)    # Number of outputs
@@ -681,8 +709,8 @@ class DEMInversion:
         if u is not None: 
             z[-1] = u + z[-1]
 
-        Z    = [DEMInversion.generalized_coordinates(zi, n).unsqueeze(-1) for zi in z]
-        W    = [DEMInversion.generalized_coordinates(wi, n).unsqueeze(-1) for wi in w]
+        Z    = [DEMInversion.generalized_coordinates(zi, n, dt).unsqueeze(-1) for zi in z]
+        W    = [DEMInversion.generalized_coordinates(wi, n, dt).unsqueeze(-1) for wi in w]
         X    = torch.zeros((nT, n, nx, 1))
         V    = torch.zeros((nT, n, nv, 1))
 
@@ -698,7 +726,7 @@ class DEMInversion:
 
         xt = X[0]
         vt = V[0]
-        for t in range(nT - 1):     
+        for t in range(0, nT):     
             # Unpack state
             zi = [_[t] for _ in Z]
             wi = [_[t] for _ in W] 
@@ -739,12 +767,12 @@ class DEMInversion:
                 fi = M[i].f(xi[i][0], vi[i + 1][0], p)
                 gi = M[i].g(xi[i][0], vi[i + 1][0], p)
                 
-                xv = tuple(_ if sum(_.shape) > 0 else torch.Tensor([]) for _ in  (xi[i][0], vi[i+1][0]))
+                xv = tuple(_ if sum(_.shape) > 0 else torch.empty(_.shape) for _ in  (xi[i][0], vi[i+1][0]))
                 
                 # compute derivatives
                 dfi, _ = compute_df_d2f(lambda x, v: M[i].f(x, v, M[i].pE), xv, ['dx', 'dv'])
                 dgi, _ = compute_df_d2f(lambda x, v: M[i].g(x, v, M[i].pE), xv, ['dx', 'dv']) 
-                
+
                 # g(x, v) && f(x, v)
                 vi[i][0] = gi + zi[i][0]
                 f.append(fi)
@@ -768,11 +796,12 @@ class DEMInversion:
             dgdv = torch.tensor(block_matrix(dgdv))
             
             v = torch.cat(vi, dim=1)
-            x = torch.zeros((n, nx, 1)) 
+            x = torch.cat(xi, dim=1) 
 
             z = torch.cat(zi, 1)
             w = torch.cat(wi, 1)
 
+            # x[0, :] = 
             x[1, :] = f + w[0]
 
             # compute higher orders
@@ -784,6 +813,10 @@ class DEMInversion:
             dgdx = torch.kron(torch.diag(torch.ones(n-1),1), dgdx)
             dfdv = torch.kron(torch.eye(n), dfdv)
             dfdx = torch.kron(torch.eye(n), dfdx)
+
+            # Save realization
+            V[t] = v
+            X[t] = x
             
             J    = torch.tensor(block_matrix([
                 [dgdv, dgdx,   Dv,   []] , 
@@ -793,14 +826,12 @@ class DEMInversion:
             ])) 
             
             u  = torch.cat([v.reshape((-1,)), x.reshape((-1,)), z.reshape((-1,)), w.reshape((-1,))]).unsqueeze(-1)
-            du = compute_dx(D @ u, J, 1)
+            du = compute_dx(D @ u, J, dt)
+
             u  = u + du
             
             vt   = u[:v.shape[0] * v.shape[1]].reshape(v.shape)
             xt   = u[ v.shape[0] * v.shape[1]:v.shape[0] * v.shape[1] + x.shape[0] * x.shape[1]].reshape(x.shape)
-
-            V[t] = vt
-            X[t] = xt
             
         results   = dotdict()
         results.v = V
