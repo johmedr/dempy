@@ -6,13 +6,14 @@ from .dem_structs import *
 from .dem_hgm import *
 from .dem_dx import *
 
-def dem_z(M, N): 
+def dem_z(M: HierarchicalGaussianModel, N: int): 
     """ Generates states noise w and causes noise z """
 
     # TODO: add dt in HierarchicalGaussianModel
 
     nl = len(M)
-    t  = np.arange(N, dtype=np.float64)
+    dt = M.dt
+    t  = np.arange(N, dtype=np.float64) * dt
     z  = []
     w  = []
 
@@ -61,11 +62,11 @@ def dem_z(M, N):
         # create states: assume i.i.d. if precision is zero
         if torch.numel(P) > 0: 
             if torch.linalg.norm(P, ord=1) == 0:
-                wi = torch.randn(M[i].n, N) @ Kw
+                wi = torch.randn(M[i].n, N) @ Kw * dt
             elif torch.linalg.norm(P, ord=1) >= np.exp(16):
                 wi = torch.zeros((M[i].n, N))
             else: 
-                wi = torch.from_numpy(sp.linalg.sqrtm(torch.linalg.inv(P))) @ torch.randn(M[i].n, N) @ Kw        
+                wi = torch.from_numpy(sp.linalg.sqrtm(torch.linalg.inv(P))) @ torch.randn(M[i].n, N) @ Kw * dt
         else: 
             wi = torch.zeros((M[i].n, N))
 

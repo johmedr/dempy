@@ -36,9 +36,11 @@ class GaussianModel(dotdict):
         self.sw : torch.Tensor       = sw # smoothness (state noise)
 
 class HierarchicalGaussianModel(list): 
-    def __init__(self, *models: GaussianModel): 
+    def __init__(self, *models: GaussianModel, dt=None): 
         models = HierarchicalGaussianModel.prepare_models(*models)
         super().__init__(models)
+
+        self.dt = 1 if dt is None else dt 
 
     @staticmethod
     def prepare_models(*models):
