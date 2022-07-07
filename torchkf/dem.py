@@ -135,6 +135,8 @@ class DEMInversion:
             ):
         log = self.logger
 
+        torch.set_grad_enabled(False)
+
         # miscellanous variables
         # ----------------------
         M  : HierarchicalGaussianModel  = self.M        # systems, from upper-most (index 0) to lower-most (index -1)
@@ -495,18 +497,9 @@ class DEMInversion:
                     # conditional modes
                     # -----------------
                     u = torch.cat([qu.x.reshape((-1,1)), qu.v.reshape((-1,1)), qu.y.reshape((-1,1)), qu.u.reshape((-1,1))])
-                    # print('u: ', u)
+
                     # first-order derivatives
                     dVdu    = - dE.du.T @ iS @ E - dWdu/2 - Pu @ u[0:(nx+nv)*n]
-                    # print('dVdu: ', dVdu)
-                    # print('... - dE.du.T @ iS @ E: ', - dE.du.T @ iS @ E)
-                    # print('......  dE.du.T:',  dE.du.T )
-                    # print('......  iS:', iS)
-                    # print('......  E:', E)
-
-                    # print('... - dWdu/2: ', - dWdu/2)
-                    # print('... - Pu @ u[0:(nx+nv)*n]: ', - Pu @ u[0:(nx+nv)*n])
-
 
                     # second-order derivatives
                     dVduu   = - dE.du.T @ iS @ dE.du - dWduu / 2 - Pu
@@ -733,6 +726,8 @@ class DEMInversion:
 
         results.qU = dotdict({k: torch.stack([qU[i][k] for i in range(len(qU))], dim=0) for k in qU[0].keys()})
         results.qE = qE
+        
+        torch.set_grad_enabled(True)
 
         return results
 

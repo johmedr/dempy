@@ -1,6 +1,5 @@
 import numpy as np
 
-
 class dotdict(dict):
     """dot.notation access to dictionary attributes"""
     __getattr__ = dict.__getitem__
@@ -24,9 +23,8 @@ def block_matrix(nested_lists):
             if len(e) > 0: 
                 # check for height
                 if row_sizes[i]  > 0: 
-                    if e.shape[0] != row_sizes[i] : 
-                        raise ValueError(f'Unable to build block matrix: the number of rows at block-index ({i},{j}) (shape {e.shape}) '
-                                         f'does not match that of the previous block (expected {row_sizes[i]}).')
+                    if e.shape[0] != row_sizes[i]: 
+                        raise ValueError('Unable to build block matrix: the number of rows at block-index ({},{}) (shape {}) does not match that of the previous block (expected {}).'.format(i,j,e.shape,row_sizes[i]))
                 
                 else: 
                     row_sizes[i]  = e.shape[0]
@@ -34,20 +32,11 @@ def block_matrix(nested_lists):
                 # check for width
                 if col_sizes[j] > 0:
                     if e.shape[1] != col_sizes[j]: 
-                        raise ValueError(f'Unable to build block matrix: the number of columns at block-index ({i},{j}) (shape {e.shape}) '
-                                         f'does not match that of the previous block (expected {col_sizes[j]}).')
+                        raise ValueError('Unable to build block matrix: the number of columns at block-index ({},{}) (shape {}) does not match that of the previous block (expected {}).'.format(i,j,e.shape,col_sizes[j]))
                 
                 else: 
                     col_sizes[j] = e.shape[1]
 
-            # check for empty columns
-            # if i == len(nested_lists) - 1 and col_sizes[j] == 0:
-            #     raise ValueError(f'Column {i+1} contains only empty matrices!')
-
-        # check for empty rows
-        # if row_sizes[i] == 0:
-        #     raise ValueError(f'Row {i+1} contains only empty matrices!')
-    
     arr = []
     for i, row in enumerate(nested_lists): 
         arr_row = []

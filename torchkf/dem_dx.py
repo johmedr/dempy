@@ -45,7 +45,7 @@ def compute_df_d2f(func, inputs, input_keys=None) -> Tuple[dotdict, dotdict]:
     for i in range(len(inputs)): 
         # Compute d/dxj(dfdxi)
         Hi = torch.autograd.functional.jacobian(
-                lambda *x: torch.autograd.functional.jacobian(func, x)[i],
+                lambda *x: torch.autograd.functional.jacobian(func, x)[i], 
                 inputs, vectorize=True)
         Hij = dotdict()
         for j in range(len(inputs)): 
