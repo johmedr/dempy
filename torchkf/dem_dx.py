@@ -1,6 +1,8 @@
 from typing import Tuple
 import torch 
 import sympy
+import scipy as sp
+import scipy.linalg
 
 from .dem_structs import *
 import math
@@ -19,6 +21,7 @@ def compute_df_d2f(func, inputs, input_keys=None) -> Tuple[dotdict, dotdict]:
     df.dk is the derivative wrt input indexed  by input key 'dk'
     d2f.di.dj is the 2nd-order derivative wrt inputs 'di' and 'dj'. 
     """
+    raise NotImplementedError()
     if input_keys is None:
         input_keys = [f'dx{i}' for i in range(len(inputs))]
     else: 
@@ -70,35 +73,25 @@ def compute_df_d2f(func, inputs, input_keys=None) -> Tuple[dotdict, dotdict]:
 
 def compute_dx(f, dfdx, t, isreg=False): 
     if len(f.shape) == 1: 
-        f = f.unsqueeze(-1)
+        f = f[..., None]
 
     # if isreg we use t as a regularization parameter   
     if isreg:
-        t  = np.exp(t - torch.logdet(dfdx)/f.shape[0])
+        t  = np.exp(t - np.linalg.slogdet(dfdx)[1]/f.shape[0])
 
     if f.shape[0] != dfdx.shape[0]: 
         raise ValueError(f'Shape mismatch: first dim of f {f.shape} must match that of df/dx {dfdx.shape}.')
     if len(f) == len(dfdx) == 0:
-        return torch.Tensor([[]])
+        return np.array([[]])
 
-    J = torch.Tensor(block_matrix([[np.zeros((1,1)), []], [f * t, dfdx * t]]))
-    dx = torch.matrix_exp(J)
+    J = block_matrix([[np.zeros((1,1)), []], [f * t, dfdx * t]])
+    dx = sp.linalg.expm(J)
     return dx[1:, 0, None]
 
 
 from sympy.utilities.autowrap import autowrap
 import itertools
 
-
-class autowrapnd:     
-    def __init__(self, expr): 
-        self._func = autowrap(expr)
-    
-    def __call__(self, *args): 
-        try: 
-            return self._func(*itertools.chain.from_iterable(_.view(-1) for _ in args))
-        except:
-            return self._func(*itertools.chain.from_iterable(np.array(_).flat for _ in args))
 
 def compute_sym_df_d2f(func, *dims, input_keys=None, wrt=None, cast_to=np.ndarray):
     """ 
@@ -160,11 +153,11 @@ def compute_sym_df_d2f(func, *dims, input_keys=None, wrt=None, cast_to=np.ndarra
     args = [v[1] for v in var]
 
 
-    fxvp = sympy.simplify(sympy.Matrix(func(*args)))
+    fxvp = sympy.Matrix(func(*args))
     l = fxvp.shape[0]
 
     dfsymb  = dotdict({
-        d: sympy.simplify(fxvp.jacobian(sym))
+        d: fxvp.jacobian(sym)
         for d, sym in flatvar
         if d in wrt
     })
@@ -189,8 +182,8 @@ def compute_sym_df_d2f(func, *dims, input_keys=None, wrt=None, cast_to=np.ndarra
             h  = h.reshape(l, sym1.shape[0], sym2.shape[0])
             ht = sympy.permutedims(h, (0, 2, 1))
             
-            h  = sympy.simplify(sympy.Matrix(h.reshape(l, sym1.shape[0]*sym2.shape[0])))
-            ht = sympy.simplify(sympy.Matrix(h.reshape(l, sym1.shape[0]*sym2.shape[0])))
+            h  = sympy.Matrix(h.reshape(l, sym1.shape[0]*sym2.shape[0]))
+            ht = sympy.Matrix(h.reshape(l, sym1.shape[0]*sym2.shape[0]))
             
             if len(h.free_symbols) > 0: 
 

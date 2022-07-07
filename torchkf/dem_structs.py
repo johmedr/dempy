@@ -15,6 +15,9 @@ class cdotdict(dotdict):
         })
 
 def block_matrix(nested_lists): 
+
+    # TODO: use np.blocks instead...
+
     # a is a list of list [[[], [], tensor], [[], tensor, []], [tensor, [], []]]
     # row and column size must be similar
 

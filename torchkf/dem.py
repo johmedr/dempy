@@ -4,6 +4,8 @@ from typing import Dict, Optional, List, Callable, Tuple
 import numpy as np
 from itertools import chain
 import logging
+import scipy as sp
+import scipy.linalg
 from pprint import pformat
 from tqdm.autonotebook import tqdm
 import pprint
@@ -57,16 +59,16 @@ class DEMInversion:
             s = np.exp(-8)
 
 
-        k = torch.arange(p)
+        k = np.arange(p)
         x = np.sqrt(2) * s
         r = np.cumprod(1 - 2. * k) / (x**(2*k))
-        S = torch.zeros((p,p))
+        S = np.zeros((p,p))
         for i in range(p): 
             j = 2 * k - i
-            filt = torch.logical_and(j >= 0, j < p)
+            filt = np.logical_and(j >= 0, j < p)
             S[i,j[filt]] = (-1) ** (i) * r[filt]
 
-        R = torch.linalg.inv(S).contiguous()
+        R = np.linalg.inv(S)#.contiguous()
 
         if cov: 
             return S, R
@@ -74,7 +76,7 @@ class DEMInversion:
 
     @staticmethod
     def generalized_coordinates(
-        x    : torch.Tensor,    # timeseries
+        x    : np.ndarray,    # timeseries
         p    : int,             # embedding order,
         dt   : int = 1          # sampling interval
         ):
@@ -83,9 +85,9 @@ class DEMInversion:
             series_generalized = T * [series[t-order/2], dots, series[t+order/2]]
         """
         n_times, dim = x.shape
-        E = torch.zeros((p, p)).double() 
-        x = torch.DoubleTensor(x)
-        times = torch.arange(1, n_times + 1)
+        E = np.zeros((p, p))
+        x = np.array(x)
+        times = np.arange(1, n_times + 1)
 
         # Create E_ij(t) (note that indices start at 0) 
         for i in range(p): 
@@ -93,7 +95,7 @@ class DEMInversion:
                 E[i, j] = float((i + 1 - int(p / 2) * dt)**(j) / np.math.factorial(j))
 
         # Compute T
-        T = torch.linalg.inv(E)
+        T = np.linalg.inv(E)
 
         # Compute the slices
         slices = []
@@ -102,9 +104,9 @@ class DEMInversion:
             end = start + p
 
             if start < 0: 
-                X = torch.cat((- start) * [x[0, None]] + [x[0:end]])
+                X = np.concatenate((- start) * [x[0, None]] + [x[0:end]])
             elif end > n_times:
-                X = torch.cat([x[start:n_times]] + (end - n_times) * [x[-1, None]])
+                X = np.concatenate([x[start:n_times]] + (end - n_times) * [x[-1, None]])
             else: 
                 X = x[start:end]
 
@@ -112,7 +114,7 @@ class DEMInversion:
             slices.append(X)
 
 
-        slices = torch.stack(slices, dim=0)
+        slices = np.stack(slices, axis=0)
 
         # series_slices is (n_times, order + 1, dim)
         # T is ( order+1, order+1)
@@ -123,9 +125,9 @@ class DEMInversion:
 
 
     def run(self, 
-            y   : torch.Tensor,                     # Observed timeseries with shape (time, dimension) 
-            u   : Optional[torch.Tensor] = None,    # Explanatory variables, inputs or prior expectation of causes
-            x   : Optional[torch.Tensor] = None,    # Confounds
+            y   : np.ndarray,                     # Observed timeseries with shape (time, dimension) 
+            u   : Optional[np.ndarray] = None,    # Explanatory variables, inputs or prior expectation of causes
+            x   : Optional[np.ndarray] = None,    # Confounds
             nD  : int = 1,                          # Number of D-steps 
             nE  : int = 8,                          # Number of E-steps
             nM  : int = 8,                          # Number of M-steps
@@ -135,7 +137,7 @@ class DEMInversion:
             ):
         log = self.logger
 
-        torch.set_grad_enabled(False)
+        # torch.set_grad_enabled(False)
 
         # miscellanous variables
         # ----------------------
@@ -166,8 +168,8 @@ class DEMInversion:
         # ------
         qE  : List[dotdict]      = list()               # errors
         B   : dotdict            = dotdict()            # saved states
-        F   : torch.Tensor       = torch.zeros(nE)      # Free-energy
-        A   : torch.Tensor       = torch.zeros(nE)      # Free-action
+        F   : np.ndarray       = np.zeros(nE)      # Free-energy
+        A   : np.ndarray       = np.zeros(nE)      # Free-action
 
         # prior moments
         # -------------
@@ -182,21 +184,21 @@ class DEMInversion:
             raise ValueError(f'Last dimension of input y ({y.shape}) does not match that of deepest model cause ({M[0].l})')
 
         if u is None:
-            u = torch.zeros(nT, nc)
+            u = np.zeros((nT, nc))
         elif u.shape[1] != nc: 
             raise ValueError(f'Last dimension of input u ({u.shape}) does not match that of deepest model cause ({M[-1].l})')
 
         if x is None:
-            x = torch.zeros(nT, 0)
+            x = np.zeros((nT, 0))
         
         Y = DEMInversion.generalized_coordinates(y, n, dt) 
-        U = torch.zeros((nT, n, nc))
-        X = torch.zeros((nT, n, nc))
+        U = np.zeros((nT, n, nc))
+        X = np.zeros((nT, n, nc))
         if u.shape[-1] > 0: 
             U[:, :d] = DEMInversion.generalized_coordinates(u, d, dt) 
         if x.shape[-1] > 0:
             X[:, :d] = DEMInversion.generalized_coordinates(x, d, dt) 
-        else: X = torch.zeros((nT, n, 0))
+        else: X = np.zeros((nT, n, 0))
 
         # setup integration times
         if td is None: 
@@ -211,11 +213,11 @@ class DEMInversion:
         Q    = []
         v0, w0 = [], []
         for i in range(nl):
-            v0.append(torch.zeros(M[i].l, M[i].l))
-            w0.append(torch.zeros(M[i].n, M[i].n))
-        V0 = torch.kron(torch.zeros(n,n), torch.block_diag(*v0))
-        W0 = torch.kron(torch.zeros(n,n), torch.block_diag(*w0))
-        Qp = torch.block_diag(V0, W0)
+            v0.append(np.zeros((M[i].l, M[i].l)))
+            w0.append(np.zeros((M[i].n, M[i].n)))
+        V0 = np.kron(np.zeros((n,n)), sp.linalg.block_diag(*v0))
+        W0 = np.kron(np.zeros((n,n)), sp.linalg.block_diag(*w0))
+        Qp = sp.linalg.block_diag(V0, W0)
 
         # Qp is: 
         # ((ny*n,    0,    0)
@@ -234,13 +236,13 @@ class DEMInversion:
             for j in range(len(M[i].Q)): 
                 q    = list(*v0)
                 q[i] = M[i].Q[j]
-                Q.append(torch.block_diag(torch.kron(iVv, torch.block_diag(*q)), W0))
+                Q.append(sp.linalg.block_diag(np.kron(iVv, sp.linalg.block_diag(*q)), W0))
 
             # and fixed components (V) 
             # ------------------------
             q    = list(v0)
             q[i] = M[i].V
-            Qp  += torch.block_diag(torch.kron(iVv, torch.block_diag(*q)), W0)
+            Qp  += sp.linalg.block_diag(np.kron(iVv, sp.linalg.block_diag(*q)), W0)
 
 
             # noise on hidden states (R)
@@ -248,13 +250,13 @@ class DEMInversion:
             for j in range(len(M[i].R)): 
                 q    = list(*w0)
                 q[i] = M[i].R[j]
-                Q.append(torch.block_diag(V0, torch.kron(iVw, torch.block_diag(*q))))
+                Q.append(sp.linalg.block_diag(V0, np.kron(iVw, sp.linalg.block_diag(*q))))
 
             # and fixed components (W) 
             # ------------------------
             q    = list(w0)
             q[i] = M[i].W
-            Qp  += torch.block_diag(V0, torch.kron(iVw, torch.block_diag(*q)))
+            Qp  += sp.linalg.block_diag(V0, np.kron(iVw, sp.linalg.block_diag(*q)))
 
         # number of hyperparameters
         # -------------------------
@@ -262,12 +264,12 @@ class DEMInversion:
 
         # fixed priors on states (u) 
         # --------------------------
-        xP              =   torch.block_diag(*(M[i].xP for i in range(nl)))
-        Px              =   torch.kron(DEMInversion.generalized_covariance(n, 0), xP)
-        Pv              =   torch.zeros(n*nv,n*nv)
-        Pv[:d*nv,:d*nv] =   torch.kron(DEMInversion.generalized_covariance(d, 0), torch.zeros(nv, nv))
-        Pu              =   torch.block_diag(Px, Pv)
-        Pu[:nu,:nu]     =   Pu[:nu,:nu] + torch.eye(nu, nu) * nu * np.finfo(np.float32).eps
+        xP              =   sp.linalg.block_diag(*(M[i].xP for i in range(nl)))
+        Px              =   np.kron(DEMInversion.generalized_covariance(n, 0), xP)
+        Pv              =   np.zeros((n*nv,n*nv))
+        Pv[:d*nv,:d*nv] =   np.kron(DEMInversion.generalized_covariance(d, 0), np.zeros((nv, nv)))
+        Pu              =   sp.linalg.block_diag(Px, Pv)
+        Pu[:nu,:nu]     =   Pu[:nu,:nu] + np.eye(nu, nu) * nu * np.finfo(np.float32).eps
 
         iqu             =   dotdict()
 
@@ -275,11 +277,11 @@ class DEMInversion:
         # -----------
         hgE   = list(chain((M[i].hE for i in range(nl)), (M[i].gE for i in range(nl))))
         hgC   = chain((M[i].hC for i in range(nl)), (M[i].gC for i in range(nl)))
-        ph.h  = torch.cat(hgE)           # prior expectation on h
-        ph.c  = torch.block_diag(*hgC)    # prior covariance on h
+        ph.h  = np.concatenate(hgE)           # prior expectation on h
+        ph.c  = sp.linalg.block_diag(*hgC)    # prior covariance on h
         qh.h  = ph.h                     # conditional expecatation 
         qh.c  = ph.c                     # conditional covariance
-        ph.ic = torch.linalg.pinv(ph.c)  # prior precision      
+        ph.ic = np.linalg.pinv(ph.c)  # prior precision      
 
         # priors on parameters (in reduced parameter space)
         # =================================================
@@ -289,14 +291,14 @@ class DEMInversion:
         for i in range(nl - 1): 
             # eigenvector reduction: p <- pE + qp.u * qp.p 
             # --------------------------------------------
-            Ui      = torch.linalg.svd(M[i].pC, full_matrices=False)[0]
+            Ui      = np.linalg.svd(M[i].pC, full_matrices=False)[0]
             M[i].p  = Ui.shape[1]               # number of qp.p
 
             qp.u.append(Ui)                     # basis for parameters (U from SVD's USV')
-            qp.p.append(torch.zeros((M[i].p, 1)))    # initial qp.p 
+            qp.p.append(np.zeros((M[i].p, 1)))    # initial qp.p 
             pp.c.append(Ui.T @ M[i].pC @ Ui)    # prior covariance
 
-        Up = torch.block_diag(*qp.u)
+        Up = sp.linalg.block_diag(*qp.u)
 
         # initialize and augment with confound parameters B; with flat priors
         # -------------------------------------------------------------------
@@ -306,9 +308,9 @@ class DEMInversion:
         nf    = nP + nn                         # number of free parameters
         ip    = slice(0,nP)
         ib    = slice(nP,nP + nn)
-        pp.c  = torch.block_diag(*pp.c)
-        pp.ic = torch.linalg.inv(pp.c)
-        pp.p  = torch.cat(qp.p)
+        pp.c  = sp.linalg.block_diag(*pp.c)
+        pp.ic = np.linalg.inv(pp.c)
+        pp.p  = np.concatenate(qp.p)
 
         # initialize conditional density q(p) := qp.e (for D-step)
         # --------------------------------------------------------
@@ -318,9 +320,9 @@ class DEMInversion:
                 qp.e.append(qp.p[i] + qp.u[i].T @ (M[i].P - M[i].pE))
             except KeyError: 
                 qp.e.append(qp.p[i])
-        qp.e  = torch.cat(qp.e)
-        qp.c  = torch.zeros(nf, nf)
-        qp.b  = torch.zeros(ny, nb)
+        qp.e  = np.concatenate(qp.e)
+        qp.c  = np.zeros((nf, nf))
+        qp.b  = np.zeros((ny, nb))
 
         # initialize dedb
         # ---------------
@@ -328,41 +330,41 @@ class DEMInversion:
 
         # initialize arrays for D-step
         # ============================
-        qu.x = torch.zeros(n, nx)
-        qu.v = torch.zeros(n, nv)
-        qu.y = torch.zeros(n, ny)
-        qu.u = torch.zeros(n, nc)
+        qu.x = np.zeros((n, nx))
+        qu.v = np.zeros((n, nv))
+        qu.y = np.zeros((n, ny))
+        qu.u = np.zeros((n, nc))
 
         # initialize arrays for hierarchical structure of x[0] and v[0]
         if nx > 0: 
-            qu.x[0, :] = torch.cat([M[i].x for i in range(0, nl-1)], axis=0).squeeze()
+            qu.x[0, :] = np.concatenate([M[i].x for i in range(0, nl-1)], axis=0).squeeze()
 
         if nv > 0: 
-            qu.v[0, :] = torch.cat([M[i].v for i in range(1,   nl)], axis=0).squeeze()
+            qu.v[0, :] = np.concatenate([M[i].v for i in range(1,   nl)], axis=0).squeeze()
 
         # derivatives for Jacobian of D-step 
         # ----------------------------------
-        Dx              = torch.kron(torch.diag(torch.ones(n-1), 1), torch.eye(nx))
-        Dv              = torch.kron(             torch.zeros(n, n), torch.eye(nv))
-        Dv[:nv*d,:nv*d] = torch.kron(torch.diag(torch.ones(d-1), 1), torch.eye(nv))
-        Dy              = torch.kron(torch.diag(torch.ones(n-1), 1), torch.eye(ny))
-        Dc              = torch.kron(             torch.zeros(n, n), torch.eye(nv))
-        Dc[:nc*d,:nc*d] = torch.kron(torch.diag(torch.ones(d-1), 1), torch.eye(nc))
-        D               = torch.block_diag(Dx, Dv, Dy, Dc)
+        Dx              = np.kron(np.diag(np.ones((n-1,)), 1), np.eye(nx))
+        Dv              = np.kron(           np.zeros((n, n)), np.eye(nv))
+        Dv[:nv*d,:nv*d] = np.kron(np.diag(np.ones((d-1,)), 1), np.eye(nv))
+        Dy              = np.kron(np.diag(np.ones((n-1,)), 1), np.eye(ny))
+        Dc              = np.kron(           np.zeros((n, n)), np.eye(nv))
+        Dc[:nc*d,:nc*d] = np.kron(np.diag(np.ones((d-1,)), 1), np.eye(nc))
+        D               = sp.linalg.block_diag(Dx, Dv, Dy, Dc)
 
         # and null blocks
         # ---------------
-        dVdy  = torch.zeros(n * ny, 1)
-        dVdc  = torch.zeros(n * nc, 1)
-        dVdyy = torch.zeros(n * ny, n * ny)
-        dVdcc = torch.zeros(n * nc, n * nc)
+        dVdy  = np.zeros((n * ny, 1))
+        dVdc  = np.zeros((n * nc, 1))
+        dVdyy = np.zeros((n * ny, n * ny))
+        dVdcc = np.zeros((n * nc, n * nc))
 
         # gradients and curvatures for conditional uncertainty
         # ----------------------------------------------------
-        dWdu  = torch.zeros(nu, 1)
-        dWdp  = torch.zeros(nf, 1)
-        dWduu = torch.zeros(nu, nu)
-        dWdpp = torch.zeros(nf, nf)
+        dWdu  = np.zeros((nu, 1))
+        dWdp  = np.zeros((nf, 1))
+        dWduu = np.zeros((nu, nu))
+        dWdpp = np.zeros((nf, nf))
 
         # preclude unnecessary iterations
         # -------------------------------
@@ -379,8 +381,8 @@ class DEMInversion:
         # -------------------------------------------------------------
         ix = slice(ny*n + nv*n,ny*n + nv*n + nx*n)
         iv = slice(ny*n,ny*n + nv*d)
-        je = torch.diag(Qp) < np.exp(16)
-        ju = torch.cat([je[ix], je[iv]])
+        je = np.diag(Qp) < np.exp(16)
+        ju = np.concatenate([je[ix], je[iv]])
 
 
         # E-step: (with) embedded D- and M-steps) 
@@ -393,10 +395,10 @@ class DEMInversion:
 
             # [re-]set accumulators for E-step 
             # --------------------------------
-            dFdh  = torch.zeros(nh, 1)
-            dFdhh = torch.zeros(nh, nh)
-            dFdp  = torch.zeros(nf, 1)
-            dFdpp = torch.zeros(nf, nf)
+            dFdh  = np.zeros((nh, 1))
+            dFdhh = np.zeros((nh, nh))
+            dFdp  = np.zeros((nf, 1))
+            dFdpp = np.zeros((nf, nf))
             qp.ic = 0
             iqu.c = 0
             EE    = 0
@@ -439,8 +441,8 @@ class DEMInversion:
 
                     # derivatives of responses and inputs
                     # -----------------------------------
-                    qu.y  = Y[iT].clone()
-                    qu.u  = U[iT].clone()
+                    qu.y  = Y[iT].copy()
+                    qu.u  = U[iT].copy()
 
                     # compute dEdb (derivatives of confounds)
                     # NotImplemented 
@@ -453,13 +455,13 @@ class DEMInversion:
                     # conditional covariance [of states u]
                     # ------------------------------------
                     qu.p         = dE.du.T @ iS @ dE.du + Pu
-                    quc          = torch.zeros((nv+nx)*n, (nv+nx)*n)
-                    quc[:nu,:nu] = torch.diag(ju.double()) @ torch.linalg.inv(qu.p[:nu,:nu]) @ torch.diag(ju.double()) 
+                    quc          = np.zeros(((nv+nx)*n, (nv+nx)*n))
+                    quc[:nu,:nu] = np.diag(ju.astype(np.float64)) @ np.linalg.inv(qu.p[:nu,:nu]) @ np.diag(ju.astype(np.float64)) 
                     qu.c         = quc
                     # differs from spm_DEM: we use ju to select components of quc that are not very precise
                     # otherwise, some rows and cols of quc are set to 0, and therefore the det is 0
                     # In SPM, this is done internally by spm_logdet 
-                    iqu.c        = iqu.c + torch.logdet(quc[ju][:, ju]) 
+                    iqu.c        = iqu.c + np.linalg.slogdet(quc[ju][:, ju])[1] 
 
                     # and conditional covariance [of parameters P]
                     # --------------------------------------------
@@ -474,15 +476,15 @@ class DEMInversion:
                     if iD == 0: 
                         if iE == 0:
                             qE.append(E.squeeze(1))
-                            qU.append(dotdict({k: v.clone() for k, v in qu.items()})) 
+                            qU.append(dotdict({k: v.copy() for k, v in qu.items()})) 
                         else: 
                             qE[iT] = E.squeeze(1)
-                            qU[iT] = dotdict({k: v.clone() for k, v in qu.items()})
+                            qU[iT] = dotdict({k: v.copy() for k, v in qu.items()})
 
                     # uncertainty about parameters dWdv, ...
                     if nP > 0: 
-                        CJp   = torch.zeros(iS.shape[0] * nP, (nx + nv) * n)
-                        dEdpu = torch.zeros(iS.shape[0] * nP, (nx + nv) * n)
+                        CJp   = np.zeros((iS.shape[0] * nP, (nx + nv) * n))
+                        dEdpu = np.zeros((iS.shape[0] * nP, (nx + nv) * n))
                         for i in range((nx + nv) * n): 
                             CJp[:, i]   = (qp.c[ip,ip] @ dE.dpu[i].T @ iS).reshape((-1,))
                             dEdpu[:, i] = (dE.dpu[i].T).reshape((-1,))
@@ -496,7 +498,7 @@ class DEMInversion:
 
                     # conditional modes
                     # -----------------
-                    u = torch.cat([qu.x.reshape((-1,1)), qu.v.reshape((-1,1)), qu.y.reshape((-1,1)), qu.u.reshape((-1,1))])
+                    u = np.concatenate([qu.x.reshape((-1,1)), qu.v.reshape((-1,1)), qu.y.reshape((-1,1)), qu.u.reshape((-1,1))])
 
                     # first-order derivatives
                     dVdu    = - dE.du.T @ iS @ E - dWdu/2 - Pu @ u[0:(nx+nv)*n]
@@ -507,15 +509,15 @@ class DEMInversion:
                     dVduc   = - dE.du.T @ iS @ dE.dc
                     
                     # gradient
-                    dFdu = torch.cat([dVdu.reshape((-1,)), dVdy.reshape((-1,)), dVdc.reshape((-1,))], dim=0)
+                    dFdu = np.concatenate([dVdu.reshape((-1,)), dVdy.reshape((-1,)), dVdc.reshape((-1,))], axis=0)
 
                     # Jacobian (variational flow)
-                    dFduu = torch.Tensor(block_matrix([[dVduu, dVduy, dVduc],
-                                                       [   [], dVdyy,    []],
-                                                       [   [],    [], dVdcc]]))
+                    dFduu = block_matrix([[dVduu, dVduy, dVduc],
+                                        [   [], dVdyy,    []],
+                                        [   [],    [], dVdcc]])
 
                     # update conditional modes of states
-                    f     = K * dFdu.unsqueeze(-1)  + D @ u
+                    f     = K * dFdu[..., None]  + D @ u
                     dfdu  = K * dFduu + D
                     du    = compute_dx(f, dfdu, td)
                     q     = u + du
@@ -529,8 +531,8 @@ class DEMInversion:
                 # Gradients and curvatures for E-step 
 
                 if nP > 0: 
-                    CJu     = torch.zeros((nx + nv) * n * iS.shape[0], nP)
-                    dEdup   = torch.zeros((nx + nv) * n * iS.shape[0], nP)
+                    CJu     = np.zeros(((nx + nv) * n * iS.shape[0], nP))
+                    dEdup   = np.zeros(((nx + nv) * n * iS.shape[0], nP))
                     for i in range(nP): 
                         CJu[:, i]   = (qu.c @ dE.dup[i].T @ iS).reshape((-1,))
                         dEdup[:, i] = (dE.dup[i].T).reshape((-1,))
@@ -547,24 +549,24 @@ class DEMInversion:
                 ECE = ECE + ECEu + ECEp
 
             # M-step - optimize hyperparameters (mh = total update)
-            mh = torch.zeros(nh)
+            mh = np.zeros((nh,))
             if nM > 1: 
                 Mbar.reset()
             for iM in range(nM): 
                 # [re-]set precisions using ReML hyperparameter estimates
                 iS    = Qp + sum(Q[i] * np.exp(qh.h[i]) for i in range(nh))
-                S     = torch.linalg.inv(iS)
+                S     = np.linalg.inv(iS)
                 dS    = ECE + EE - S * nT 
 
                 # 1st order derivatives 
                 for i in range(nh): 
                     dPdh[i] = Q[i] * np.exp(qh.h[i])
-                    dFdh[i] = - torch.trace(dPdh[i] * dS) / 2
+                    dFdh[i] = - np.trace(dPdh[i] * dS) / 2
 
                 # 2nd order derivatives 
                 for i in range(nh): 
                     for j in range(nh): 
-                        dFdhh[i, j] = - torch.trace(dPdh[i] * S * dPdh[j] * S * nT)/ 2
+                        dFdhh[i, j] = - np.trace(dPdh[i] * S * dPdh[j] * S * nT)/ 2
 
                 # hyperpriors
                 qh.e        = qh.h - ph.h
@@ -575,15 +577,15 @@ class DEMInversion:
                     # update ReML extimate of parameters
                     dh = compute_dx(dFdh, dFdhh, tm, isreg=True)
 
-                    dh   = torch.clamp(dh, -2, 2)
+                    dh   = np.clip(dh, -2, 2)
                     qh.h = qh.h + dh 
                     mh   = mh + dh
 
                 # conditional covariance of hyperparameters 
-                qh.c = torch.linalg.inv(dFdhh)
+                qh.c = np.linalg.inv(dFdhh)
 
                 # convergence (M-step)
-                if nh > 0 and (((dFdh.T @ dh).squeeze() < tol) or torch.linalg.norm(dh, 1) < tol): 
+                if nh > 0 and (((dFdh.T @ dh).squeeze() < tol) or np.linalg.norm(dh, 1) < tol): 
                     break
 
                 if nM > 1: 
@@ -595,32 +597,32 @@ class DEMInversion:
             # conditional precision of parameters
             # -----------------------------------
             qp.ic[ip, ip] = qp.ic[ip, ip] + pp.ic
-            qp.c = torch.linalg.inv(qp.ic)
+            qp.c = np.linalg.inv(qp.ic)
 
             # evaluate objective function F
             # =============================
 
             # free-energy and action 
             # ----------------------
-            Lu = - torch.trace(iS[je][:, je] @ EE[je][:, je]) / 2 \
+            Lu = - np.trace(iS[je][:, je] @ EE[je][:, je]) / 2 \
                  - n * ny * np.log(2 * np.pi) * nT / 2\
-                 + torch.logdet(iS[je][:, je]) * nT / 2\
+                 + np.linalg.slogdet(iS[je][:, je])[1] * nT / 2\
                  + iqu.c / (2*nD)
 
-            Lp = - torch.trace(qp.e.T @ pp.ic @ qp.e) / 2\
-                 - torch.trace(qh.e.T @ ph.ic @ qh.e) / 2\
-                 + torch.logdet(qp.c[ip][:, ip] @ pp.ic) / 2\
-                 + torch.logdet(qh.c @ ph.ic) / 2
+            Lp = - np.trace(qp.e.T @ pp.ic @ qp.e) / 2\
+                 - np.trace(qh.e.T @ ph.ic @ qh.e) / 2\
+                 + np.linalg.slogdet(qp.c[ip][:, ip] @ pp.ic)[1] / 2\
+                 + np.linalg.slogdet(qh.c @ ph.ic)[1] / 2
 
-            La = - torch.trace(qp.e.T @ pp.ic @ qp.e) * nT / 2\
-                 - torch.trace(qh.e.T @ ph.ic @ qh.e) * nT / 2\
-                 + torch.logdet(qp.c[ip][:, ip] @ pp.ic * nT) * nT / 2\
-                 + torch.logdet(qh.c @ ph.ic * nT) * nT / 2
+            La = - np.trace(qp.e.T @ pp.ic @ qp.e) * nT / 2\
+                 - np.trace(qh.e.T @ ph.ic @ qh.e) * nT / 2\
+                 + np.linalg.slogdet(qp.c[ip][:, ip] @ pp.ic * nT)[1] * nT / 2\
+                 + np.linalg.slogdet(qh.c @ ph.ic * nT)[1] * nT / 2
 
 
             # print(iqu.c)
-            # print(torch.logdet(iS[je][:, je]))
-            # print(torch.trace(iS[je][:, je] @ EE[je][:, je]))
+            # print(np.linalg.slogdet(iS[je][:, je])[1])
+            # print(np.trace(iS[je][:, je] @ EE[je][:, je]))
             Li = Lu + Lp
             Ai = Lu + La 
             # print('Fi: ', Fi)
@@ -629,17 +631,17 @@ class DEMInversion:
             log.info(f'Ai: {Ai}')
             if Li == -np.inf: 
                 print('Lu: ', Lu)
-                print('... - torch.trace(iS[je][:, je] @ EE[je][:, je]) / 2', (- torch.trace(iS[je][:, je] @ EE[je][:, je]) / 2).item())
+                print('... - np.trace(iS[je][:, je] @ EE[je][:, je]) / 2', (- np.trace(iS[je][:, je] @ EE[je][:, je]) / 2).item())
                 print('... - n * ny * np.log(2 * np.pi) * nT / 2', (- n * ny * np.log(2 * np.pi) * nT / 2).item())
-                print('... + torch.logdet(iS[je][:, je]) * nT / 2',  (torch.logdet(iS[je][:, je]) * nT / 2).item())
+                print('... + np.linalg.slogdet(iS[je][:, je])[1] * nT / 2',  (np.linalg.slogdet(iS[je][:, je])[1] * nT / 2).item())
                 print('... + iqu.c / (2*nD)', (iqu.c / (2*nD)).item())
 
 
                 print('Lp: ', Lp)
-                print('...  - torch.trace(qp.e.T @ pp.ic @ qp.e) / 2',  - torch.trace(qp.e.T @ pp.ic @ qp.e) / 2)
-                print('...  - torch.trace(qh.e.T @ ph.ic @ qh.e) / 2',  - torch.trace(qh.e.T @ ph.ic @ qh.e) / 2)
-                print('...  + torch.logdet(qp.c[ip][:, ip] @ pp.ic) / 2', torch.logdet(qp.c[ip][:, ip] @ pp.ic) / 2)
-                print('...  + torch.logdet(qh.c @ ph.ic) / 2',  torch.logdet(qh.c @ ph.ic) / 2)
+                print('...  - np.trace(qp.e.T @ pp.ic @ qp.e) / 2',  - np.trace(qp.e.T @ pp.ic @ qp.e) / 2)
+                print('...  - np.trace(qh.e.T @ ph.ic @ qh.e) / 2',  - np.trace(qh.e.T @ ph.ic @ qh.e) / 2)
+                print('...  + np.linalg.slogdet(qp.c[ip][:, ip] @ pp.ic)[1] / 2', np.linalg.slogdet(qp.c[ip][:, ip] @ pp.ic)[1] / 2)
+                print('...  + np.linalg.slogdet(qh.c @ ph.ic)[1] / 2',  np.linalg.slogdet(qh.c @ ph.ic)[1] / 2)
 
             # if F is increasng save expansion point and derivatives 
             if Li > Fi or iE < 1: 
@@ -683,7 +685,7 @@ class DEMInversion:
                 qh      = dotdict(**B.qh)
                 te      = min(te - 2, -2)
                 tm      = min(tm - 2, -2)
-                dp      = torch.zeros_like(dp)
+                dp      = np.zeros_like(dp)
                 
             
             F[iE]  = Fi;
@@ -692,12 +694,9 @@ class DEMInversion:
 
             log.info(f'Li: {Li}')
             log.info(f'Ai: {Ai}')
-            # print('mh: ', mh)
-            # print('dp: ', torch.linalg.norm(dp.reshape((-1,)), 1))
-            # print('qp: ', torch.linalg.norm(torch.cat(qp.p).reshape((-1,)), 1) )
 
             # Check convergence 
-            if torch.linalg.norm(dp.reshape((-1,)), 1) <= tol * torch.linalg.norm(torch.cat(qp.p).reshape((-1,)), 1) and torch.linalg.norm(mh.reshape((-1,)), 1) <= tol: 
+            if np.linalg.norm(dp.reshape((-1,)), 1) <= tol * np.linalg.norm(np.concatenate(qp.p).reshape((-1,)), 1) and np.linalg.norm(mh.reshape((-1,)), 1) <= tol: 
                 break 
             if te < -8: 
                 break
@@ -717,14 +716,14 @@ class DEMInversion:
 
         results.qH = qH
 
-        qP.P       = Up @ qp.e + torch.cat([m.pE for m in M])
+        qP.P       = Up @ qp.e + np.concatenate([m.pE for m in M])
         qP.C       = Up @ qp.c[ip][:, ip] @ Up.T
         qP.dFdp    = Up @ dFdp[ip]
         qP.dFdpp   = Up @ dFdpp[ip][:, ip] @ Up.T
 
         results.qP = qP
 
-        results.qU = dotdict({k: torch.stack([qU[i][k] for i in range(len(qU))], dim=0) for k in qU[0].keys()})
+        results.qU = dotdict({k: np.stack([qU[i][k] for i in range(len(qU))], axis=0) for k in qU[0].keys()})
         results.qE = qE
         
 
@@ -732,7 +731,7 @@ class DEMInversion:
 
     def generate(self, nT, u=None): 
 
-        torch.set_grad_enabled(False)
+        # torch.set_grad_enabled(False)
 
         n  = self.n                 # Derivative order
         M  = self.M
@@ -746,20 +745,20 @@ class DEMInversion:
         if u is not None: 
             z[-1] = u + z[-1]
 
-        Z    = [DEMInversion.generalized_coordinates(zi, n, dt).unsqueeze(-1) for zi in z]
-        W    = [DEMInversion.generalized_coordinates(wi, n, dt).unsqueeze(-1) for wi in w]
-        X    = torch.zeros((nT, n, nx, 1))
-        V    = torch.zeros((nT, n, nv, 1))
+        Z    = [DEMInversion.generalized_coordinates(zi, n, dt)[..., None] for zi in z]
+        W    = [DEMInversion.generalized_coordinates(wi, n, dt)[..., None] for wi in w]
+        X    = np.zeros((nT, n, nx, 1))
+        V    = np.zeros((nT, n, nv, 1))
 
         # Setup initial conditions
-        X[0, 0] = torch.cat([m.x for m in M if m.n > 0], dim=0)
-        V[0, 0] = torch.cat([m.v for m in M if m.l > 0], dim=0)
+        X[0, 0] = np.concatenate([m.x for m in M if m.n > 0], axis=0)
+        V[0, 0] = np.concatenate([m.v for m in M if m.l > 0], axis=0)
 
         # Derivatives operators
-        Dx = torch.kron(torch.diag(torch.ones(n-1), 1), torch.eye(nx));
-        Dv = torch.kron(torch.diag(torch.ones(n-1), 1), torch.eye(nv));
-        D  = torch.block_diag(Dv, Dx, Dv, Dx)
-        dfdw  = torch.kron(torch.eye(n),torch.eye(nx));
+        Dx = np.kron(np.diag(np.ones((n-1,)), 1), np.eye(nx));
+        Dv = np.kron(np.diag(np.ones((n-1,)), 1), np.eye(nv));
+        D  = sp.linalg.block_diag(Dv, Dx, Dv, Dx)
+        dfdw  = np.kron(np.eye(n),np.eye(nx));
 
         xt = X[0]
         vt = V[0]
@@ -785,10 +784,10 @@ class DEMInversion:
                 nvi = nvi + M[i].l
                 
                 # Fill cells 
-                dfdx[i, i] = torch.zeros((M[i].n, M[i].n))
-                dfdv[i, i] = torch.zeros((M[i].n, M[i].l))
-                dgdx[i, i] = torch.zeros((M[i].l, M[i].n))
-                dgdv[i, i] = torch.zeros((M[i].l, M[i].l))
+                dfdx[i, i] = np.zeros((M[i].n, M[i].n))
+                dfdv[i, i] = np.zeros((M[i].n, M[i].l))
+                dgdx[i, i] = np.zeros((M[i].l, M[i].n))
+                dgdv[i, i] = np.zeros((M[i].l, M[i].l))
                 
             f   = []
             g   = []
@@ -801,10 +800,10 @@ class DEMInversion:
                 p = M[i].pE 
                 
                 # compute functions
-                fi = M[i]._f(xi[i][0], vi[i + 1][0], p)
-                gi = M[i]._g(xi[i][0], vi[i + 1][0], p)
+                fi = M[i].f(xi[i][0], vi[i + 1][0], p)
+                gi = M[i].g(xi[i][0], vi[i + 1][0], p)
                 
-                xv = tuple(_ if sum(_.shape) > 0 else torch.empty(_.shape) for _ in  (xi[i][0], vi[i+1][0]))
+                xv = tuple(_ if sum(_.shape) > 0 else np.empty(_.shape) for _ in  (xi[i][0], vi[i+1][0]))
                 
                 # compute derivatives
                 if M[i].df is not None:
@@ -831,19 +830,19 @@ class DEMInversion:
                 df.append(dfi)
                 dg.append(dgi)
             
-            f = torch.cat(f)
-            g = torch.cat(g)
+            f = np.concatenate(f)
+            g = np.concatenate(g)
             
-            dfdx = torch.tensor(block_matrix(dfdx))
-            dfdv = torch.tensor(block_matrix(dfdv))
-            dgdx = torch.tensor(block_matrix(dgdx))
-            dgdv = torch.tensor(block_matrix(dgdv))
+            dfdx = block_matrix(dfdx)
+            dfdv = block_matrix(dfdv)
+            dgdx = block_matrix(dgdx)
+            dgdv = block_matrix(dgdv)
             
-            v = torch.cat(vi, dim=1)
-            x = torch.cat(xi, dim=1) 
+            v = np.concatenate(vi, axis=1)
+            x = np.concatenate(xi, axis=1) 
 
-            z = torch.cat(zi, 1)
-            w = torch.cat(wi, 1)
+            z = np.concatenate(zi, axis=1)
+            w = np.concatenate(wi, axis=1)
 
             # x[0, :] = 
             x[1, :] = f + w[0]
@@ -853,23 +852,23 @@ class DEMInversion:
                 v[i]   = dgdx @ x[i] + dgdv @ v[i] + z[i]
                 x[i+1] = dfdx @ x[i] + dfdv @ v[i] + w[i]
             
-            dgdv = torch.kron(torch.diag(torch.ones(n-1),1), dgdv)
-            dgdx = torch.kron(torch.diag(torch.ones(n-1),1), dgdx)
-            dfdv = torch.kron(torch.eye(n), dfdv)
-            dfdx = torch.kron(torch.eye(n), dfdx)
+            dgdv = np.kron(np.diag(np.ones((n-1,)),1), dgdv)
+            dgdx = np.kron(np.diag(np.ones((n-1,)),1), dgdx)
+            dfdv = np.kron(np.eye(n), dfdv)
+            dfdx = np.kron(np.eye(n), dfdx)
 
             # Save realization
             V[t] = v
             X[t] = x
             
-            J    = torch.tensor(block_matrix([
+            J    = block_matrix([
                 [dgdv, dgdx,   Dv,   []] , 
                 [dfdv, dfdx,   [], dfdw],  
                 [[],     [],   Dv,   []],  
                 [[],     [],   [],   Dx]   
-            ])) 
+            ])
             
-            u  = torch.cat([v.reshape((-1,)), x.reshape((-1,)), z.reshape((-1,)), w.reshape((-1,))]).unsqueeze(-1)
+            u  = np.concatenate([v.reshape((-1,)), x.reshape((-1,)), z.reshape((-1,)), w.reshape((-1,))])[..., None]
             du = compute_dx(D @ u, J, dt)
 
             u  = u + du
@@ -880,7 +879,7 @@ class DEMInversion:
         results   = dotdict()
         results.v = V
         results.x = X
-        results.z = torch.cat(Z, dim=2) 
-        results.w = torch.cat(W, dim=2)
+        results.z = np.concatenate(Z, axis=2) 
+        results.w = np.concatenate(W, axis=2)
 
         return results

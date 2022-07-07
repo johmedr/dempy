@@ -1,4 +1,5 @@
-import torch
+import numpy as np
+from math import prod
 
 from .dem_structs import *
 from .dem_dx import compute_sym_df_d2f
@@ -15,33 +16,30 @@ class GaussianModel(dotdict):
         self.f  : Callable           = f  # forward function (must be numpy compatible) - takes 3 vector arguments, return 1 vector of size n
         self.g  : Callable           = g  # observation function (must be numpy compatible) - takes 3 vector arguments, return 1 vector of size l
 
-        self._f : Callable           = None # f wrapped to torch - handles shape and type conversion 
-        self._g : Callable           = None # g wrapped to torch - handles shape and type conversion 
-
         self.m  : int                = m  # number of inputs
         self.n  : int                = n  # number of states
         self.l  : int                = l  # number of outputs
         self.p  : int                = p  # number of parameters
 
-        self.x  : torch.Tensor       = x  # explicitly specified states
-        self.v  : torch.Tensor       = v  # explicitly specified inputs
+        self.x  : np.ndarray       = x  # explicitly specified states
+        self.v  : np.ndarray       = v  # explicitly specified inputs
 
-        self.pE : torch.Tensor       = pE # prior expectation of parameters p
-        self.pC : torch.Tensor       = pC # prior covariance of parameters p
-        self.hE : torch.Tensor       = hE # prior expectation of hyperparameters h (log-precision of cause noise)
-        self.hC : torch.Tensor       = hC # prior covariance of hyperparameters h (log-precision of cause noise)
-        self.gE : torch.Tensor       = gE # prior expectation of hyperparameters g (log-precision of state noise)
-        self.gC : torch.Tensor       = gC # prior covariance of hyperparameters g (log-precision of state noise)
+        self.pE : np.ndarray       = pE # prior expectation of parameters p
+        self.pC : np.ndarray       = pC # prior covariance of parameters p
+        self.hE : np.ndarray       = hE # prior expectation of hyperparameters h (log-precision of cause noise)
+        self.hC : np.ndarray       = hC # prior covariance of hyperparameters h (log-precision of cause noise)
+        self.gE : np.ndarray       = gE # prior expectation of hyperparameters g (log-precision of state noise)
+        self.gC : np.ndarray       = gC # prior covariance of hyperparameters g (log-precision of state noise)
 
-        self.Q  : List[torch.Tensor] = Q  # precision components (input noise)
-        self.R  : List[torch.Tensor] = R  # precision components (state noise)
-        self.V  : torch.Tensor       = V  # fixed precision (input noise)
-        self.W  : torch.Tensor       = W  # fixed precision (state noise)
-        self.xP : torch.Tensor       = xP # precision (states)
-        self.vP : torch.Tensor       = vP # precision (inputs)
+        self.Q  : List[np.ndarray] = Q  # precision components (input noise)
+        self.R  : List[np.ndarray] = R  # precision components (state noise)
+        self.V  : np.ndarray       = V  # fixed precision (input noise)
+        self.W  : np.ndarray       = W  # fixed precision (state noise)
+        self.xP : np.ndarray       = xP # precision (states)
+        self.vP : np.ndarray       = vP # precision (inputs)
 
-        self.sv : torch.Tensor       = sv # smoothness (input noise)
-        self.sw : torch.Tensor       = sw # smoothness (state noise)
+        self.sv : np.ndarray       = sv # smoothness (input noise)
+        self.sw : np.ndarray       = sw # smoothness (state noise)
 
         self.df      : dotdict       = None
         self.d2f     : dotdict       = None
@@ -83,8 +81,8 @@ class HierarchicalGaussianModel(list):
 
             # default fields for static models (hidden states)
             if not callable(M[i].f): 
-                M[i].f = lambda *x: torch.zeros((0,1))
-                M[i].x = torch.zeros((0,1))
+                M[i].f = lambda *x: np.zeros((0,1))
+                M[i].x = np.zeros((0,1))
                 M[i].n = 0
 
             # consistency and format check on states, parameters and functions
@@ -93,45 +91,45 @@ class HierarchicalGaussianModel(list):
             # prior expectation of parameters pE
             # ----------------------------------
             if   M[i].pE is None: 
-                 M[i].pE = torch.zeros((0,1))
+                 M[i].pE = np.zeros((0,1))
             elif len(M[i].pE.shape) == 1: 
-                 M[i].pE = M[i].pE.unsqueeze(-1)
+                 M[i].pE = M[i].pE[..., None]
 
             p      = M[i].pE.shape[0]
             M[i].p = p
 
             # and prior covariances pC
             if  M[i].pC is None:
-                M[i].pC = torch.zeros((p, p))
+                M[i].pC = np.zeros((p, p))
 
             # convert variance to covariance
             elif not hasattr(M[i].pC, 'shape') or len(M[i].pC.shape) == 0:  
-                M[i].pC = torch.eye(p) * M[i].pC
+                M[i].pC = np.eye(p) * M[i].pC
 
             # convert variances to covariance
             elif len(M[i].pC.shape) == 1: 
-                M[i].pC = torch.diag(M[i].pC)
+                M[i].pC = np.diag(M[i].pC)
 
             # check size
             if M[i].pC.shape[0] != p or M[i].pC.shape[1] != p: 
                 raise ValueError(f'Wrong shape for model[{i}].pC: expected ({p},{p}) but got {M[i].pC.shape}.')
 
         # get inputs
-        v = torch.zeros((0,0)) if M[-1].v is None else M[-1].v
-        if sum(v.shape) == 0:
+        v = np.zeros((0,0)) if M[-1].v is None else M[-1].v
+        if prod(v.shape) == 0:
             if M[-2].m is not None: 
-                v = torch.zeros((M[-2].m, 1))
+                v = np.zeros((M[-2].m, 1))
             elif M[-1].l is not None: 
-                v = torch.zeros((M[-1].l, 1))
+                v = np.zeros((M[-1].l, 1))
         M[-1].l  = v.shape[0]
         M[-1].v  = v
 
         # check functions
         for i in reversed(range(g - 1)):
-            x      = torch.zeros((M[i].n, 1)) if M[i].x is None else M[i].x
+            x      = np.zeros((M[i].n, 1)) if M[i].x is None else M[i].x
 
-            if sum(x.shape) == 0 and M[i].n > 0:
-                x = torch.zeros(M[i].n, 1)
+            if prod(x.shape) == 0 and M[i].n > 0:
+                x = np.zeros((M[i].n, 1))
             
 
             # check function f(x, v, P)
@@ -139,7 +137,7 @@ class HierarchicalGaussianModel(list):
                 raise ValueError(f"Not callable function: model[{i}].f!")
             
             try: 
-                f = M[i].f(x.numpy(), v.numpy(), M[i].pE.numpy())
+                f = M[i].f(x, v, M[i].pE)
             except: 
                 raise ValueError(f"Error while calling function: model[{i}].f")
 
@@ -155,7 +153,7 @@ class HierarchicalGaussianModel(list):
                     f'does not match output shape of model[{i+1}].g ({v.shape[0]})!')
             M[i].m = v.shape[0]
             try: 
-                v = torch.from_numpy(M[i].g(x.numpy(), v.numpy(), M[i].pE.numpy()))
+                v = M[i].g(x, v, M[i].pE)
             except: 
                 raise ValueError(f"Error while calling function: model[{i}].g")
             if M[i].l is not None and M[i].l != v.shape[0]:
@@ -168,15 +166,11 @@ class HierarchicalGaussianModel(list):
             M[i].v = v
             M[i].x = x
 
-            # store wrapped function
-            M[i]._f = vfunc((M[i].n, M[i].m, M[i].p), M[i].n)(M[i].f)
-            M[i]._g = vfunc((M[i].n, M[i].m, M[i].p), M[i].l)(M[i].g)
-
             if not M[i].num_diff and not self._use_numerical_derivatives:
                 # compute f-derivatives in the general case
                 print('Compiling derivatives, it might take some time... ', end='')
                 try:
-                    M[i].df, M[i].d2f = compute_sym_df_d2f(M[i].f, M[i].n, M[i].m, M[i].p, input_keys='xvp', cast_to=torch.tensor)
+                    M[i].df, M[i].d2f = compute_sym_df_d2f(M[i].f, M[i].n, M[i].m, M[i].p, input_keys='xvp')
                 except Exception as e: 
                     warnings.warn(f'Failed to obtain analytical derivatives for M[{i}].f. Inversion might be slower.\n'
                         f'Failed with error: {e}\n')
@@ -184,7 +178,7 @@ class HierarchicalGaussianModel(list):
 
                 # compute g-derivatives in the general case
                 try:
-                    M[i].dg, M[i].d2g = compute_sym_df_d2f(M[i].g, M[i].n, M[i].m, M[i].p, input_keys='xvp', cast_to=torch.tensor)
+                    M[i].dg, M[i].d2g = compute_sym_df_d2f(M[i].g, M[i].n, M[i].m, M[i].p, input_keys='xvp')
                 except Exception as e: 
                     warnings.warn(f'Failed to obtain analytical derivatives for M[{i}].g. Inversion might be slower.\n'
                         f'Failed with error: {e}\n')
@@ -194,7 +188,7 @@ class HierarchicalGaussianModel(list):
                 try:
                     M[i].df_qup, M[i].d2f_qup = compute_sym_df_d2f(
                         lambda x, v, q, u, p: M[i].f(x, v, p + u @ q), M[i].n, M[i].m, M[i].p, (M[i].p, M[i].p), M[i].p, 
-                        input_keys='xvpur', wrt='xvp', cast_to=torch.tensor)
+                        input_keys='xvpur', wrt='xvp')
                 except Exception as e: 
                     warnings.warn(f'Failed to obtain analytical derivatives for M[{i}].f (with p + u @ q). Inversion might be slower.\n'
                         f'Failed with error: {e}\n')
@@ -203,7 +197,7 @@ class HierarchicalGaussianModel(list):
                 try:
                     M[i].dg_qup , M[i].d2g_qup = compute_sym_df_d2f(
                         lambda x, v, q, u, p: M[i].g(x, v, p + u @ q), M[i].n, M[i].m, M[i].p, (M[i].p, M[i].p), M[i].p, 
-                        input_keys='xvpur', wrt='xvp', cast_to=torch.tensor)
+                        input_keys='xvpur', wrt='xvp')
                 except Exception as e: 
                     warnings.warn(f'Failed to obtain analytical derivatives for M[{i}].g (with p + u @ q). Inversion might be slower.\n'
                         f'Failed with error: {e}\n')
@@ -213,26 +207,26 @@ class HierarchicalGaussianModel(list):
         for i in range(g): 
 
             # hidden states
-            M[i].xP = torch.Tensor() if M[i].xP is None else M[i].xP
-            if sum(M[i].xP.shape) == len(M[i].xP.shape): 
-                M[i].xP = torch.eye(M[i].n, M[i].n) * M[i].xP.squeeze()
+            M[i].xP = np.empty(0) if M[i].xP is None else M[i].xP
+            if prod(M[i].xP.shape) == len(M[i].xP.shape): 
+                M[i].xP = np.eye(M[i].n) * M[i].xP.squeeze()
             elif len(M[i].xP.shape) == 1 and M[i].xP.shape[0] == M[i].n: 
-                M[i].xP = torch.diag(M[i].xP)
+                M[i].xP = np.diag(M[i].xP)
             elif len(M[i].xP.shape) > 2 or (len(M[i].xP.shape) == 2 and any(dim != M[i].n for dim in M[i].xP.shape)):
                 raise ValueError(f'Wrong shape for M[{i}].xP: expected ({M[i].n},{M[i].n}), got {M[i].xP.shape}.')
             else: 
-                M[i].xP = torch.zeros((M[i].n, M[i].n))
+                M[i].xP = np.zeros((M[i].n, M[i].n))
 
             # hidden causes
-            M[i].vP = torch.Tensor() if M[i].vP is None else M[i].vP
-            if sum(M[i].vP.shape) == len(M[i].vP.shape):   
-                M[i].vP = torch.eye(M[i].n, M[i].n) * M[i].vP.squeeze()
+            M[i].vP = np.empty(0) if M[i].vP is None else M[i].vP
+            if prod(M[i].vP.shape) == len(M[i].vP.shape):   
+                M[i].vP = np.eye(M[i].n) * M[i].vP.squeeze()
             elif len(M[i].vP.shape) == 1 and M[i].vP.shape[0] == M[i].n: 
-                M[i].vP = torch.diag(M[i].vP)
+                M[i].vP = np.diag(M[i].vP)
             elif len(M[i].vP.shape) > 2 or (len(M[i].vP.shape) == 2 and any(dim != M[i].n for dim in M[i].vP.shape)):
                 raise ValueError(f'Wrong shape for M[{i}].vP: expected ({M[i].n},{M[i].n}), got {M[i].vP.shape}.')
             else: 
-                M[i].vP = torch.zeros((M[i].n, M[i].n))
+                M[i].vP = np.zeros((M[i].n, M[i].n))
 
         nx = sum(M[i].n for i in range(g))
 
@@ -246,43 +240,45 @@ class HierarchicalGaussianModel(list):
 
             M[i].Q = [] if M[i].Q is None else M[i].Q
             M[i].R = [] if M[i].R is None else M[i].R
-            M[i].V = torch.Tensor() if M[i].V is None else M[i].V
-            M[i].W = torch.Tensor() if M[i].W is None else M[i].W
+            M[i].V = np.empty(0) if M[i].V is None else M[i].V
+            M[i].W = np.empty(0) if M[i].W is None else M[i].W
 
             # check hyperpriors (expectation)
-            M[i].hE = torch.zeros((len(M[i].Q), 1)) if M[i].hE is None or sum(M[i].hE.shape) == 0 else M[i].hE
-            M[i].gE = torch.zeros((len(M[i].R), 1)) if M[i].gE is None or sum(M[i].gE.shape) == 0 else M[i].gE
+            M[i].hE = np.zeros((len(M[i].Q), 1)) if M[i].hE is None or prod(M[i].hE.shape) == 0 else M[i].hE
+            M[i].gE = np.zeros((len(M[i].R), 1)) if M[i].gE is None or prod(M[i].gE.shape) == 0 else M[i].gE
 
             #  check hyperpriors (covariances)
             try:
+                assert(M[i].hC is not None)
                 M[i].hC * M[i].hE
             except: 
-                M[i].hC = torch.eye(len(M[i].hE)) / pP 
+                M[i].hC = np.eye(len(M[i].hE)) / pP 
             try:
+                assert(M[i].gC is not None)
                 M[i].gC * M[i].gE
             except: 
-                M[i].gC = torch.eye(len(M[i].gE)) / pP 
+                M[i].gC = np.eye(len(M[i].gE)) / pP 
 
             # check Q and R (precision components)
 
             # check components and assume iid if not specified
             if len(M[i].Q) > len(M[i].hE): 
-                M[i].hE = torch.zeros((M[i].Q), 1) + M[i].hE[1]
+                M[i].hE = np.zeros((len(M[i].Q), 1)) + M[i].hE[1]
             elif len(M[i].Q) < len(M[i].hE): 
-                M[i].Q  = [torch.eye(M[i].l)]
+                M[i].Q  = [np.eye(M[i].l)]
                 M[i].hE = M[i].hE[1]
 
             if len(M[i].hE) > len(M[i].hC): 
-                M[i].hC = torch.eye(len(M[i].Q)) * M[i].hC[1]
+                M[i].hC = np.eye(len(M[i].Q)) * M[i].hC[1]
             
             if len(M[i].R) > len(M[i].gE): 
-                M[i].gE = torch.zeros(len(M[i].R), 1)
+                M[i].gE = np.zeros((len(M[i].R), 1))
             elif len(M[i].R) < len(M[i].gE): 
-                M[i].R = [torch.eye(M[i].n)]
+                M[i].R = [np.eye(M[i].n)]
                 M[i].gE = M[i].gE[1]
             
             if len(M[i].gE) > len(M[i].gC): 
-                M[i].gC = torch.eye(len(M[i].R)) * M[i].gC[1]
+                M[i].gC = np.eye(len(M[i].R)) * M[i].gC[1]
 
             # check consistency and sizes (Q)
             # -------------------------------
@@ -301,26 +297,26 @@ class HierarchicalGaussianModel(list):
             # check V and W (lower bound on precisions)
             # -----------------------------------------
             if len(M[i].V.shape) == 1 and len(M[i].V) == M[i].l: 
-                M[i].V = torch.diag(M[i].V)
+                M[i].V = np.diag(M[i].V)
             elif len(M[i].V) != M[i].l:
                 try: 
-                    M[i].V = torch.eye(M[i].l) * M[i].V[0]
+                    M[i].V = np.eye(M[i].l) * M[i].V[0]
                 except:
                     if len(M[i].hE) == 0:
-                        M[i].V = torch.eye(M[i].l)
+                        M[i].V = np.eye(M[i].l)
                     else: 
-                        M[i].V = torch.zeros((M[i].l, M[i].l))
+                        M[i].V = np.zeros((M[i].l, M[i].l))
 
             if len(M[i].W.shape) == 1 and len(M[i].W) == M[i].n: 
-                M[i].W = torch.diag(M[i].W)
+                M[i].W = np.diag(M[i].W)
             elif len(M[i].W) != M[i].n:
                 try: 
-                    M[i].W = torch.eye(M[i].n) * M[i].W[0]
+                    M[i].W = np.eye(M[i].n) * M[i].W[0]
                 except:
                     if len(M[i].gE) == 0:
-                        M[i].W = torch.eye(M[i].n)
+                        M[i].W = np.eye(M[i].n)
                     else: 
-                        M[i].W = torch.zeros((M[i].n,M[i].n))
+                        M[i].W = np.zeros((M[i].n,M[i].n))
 
             # check smoothness parameter
             s = 0 if nx == 0 else 1/2.

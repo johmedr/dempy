@@ -2,8 +2,12 @@ import torch
 from .dem_structs import *
 from .dem_hgm import *
 from .dem_dx import *
+
 from typing import List
 from pprint import pprint
+import numpy as np
+import scipy as sp
+import scipy.linalg 
 
 
 def dem_eval_err_diff(n: int, d: int, M: HierarchicalGaussianModel, qu: dotdict, qp: dotdict): 
@@ -13,7 +17,7 @@ def dem_eval_err_diff(n: int, d: int, M: HierarchicalGaussianModel, qu: dotdict,
         ne = sum(m.l for m in M) 
         nv = sum(m.m for m in M)
         nx = sum(m.n for m in M)
-        np = sum(M[i].p for i in range(nl - 1))
+        nP = sum(M[i].p for i in range(nl - 1))
         ny = M[0].l
         nc = M[-1].l
 
@@ -37,19 +41,19 @@ def dem_eval_err_diff(n: int, d: int, M: HierarchicalGaussianModel, qu: dotdict,
 
             p = M[i].pE + qp.u[i] @ qp.p[i]
             try: 
-                res = M[i]._f(xi, vi, p)
+                res = M[i].f(xi, vi, p)
             except: 
                 raise RuntimeError(f"Error while evaluating model[{i}].f!")
             f.append(res)
 
             try: 
-                res = M[i]._g(xi, vi, p)
+                res = M[i].g(xi, vi, p)
             except: 
                 raise RuntimeError(f"Error while evaluating model[{i}].g!")
             g.append(res)
 
-        f = torch.cat(f).reshape((nx,))
-        g = torch.cat(g).reshape((ne - nc,))
+        f = np.concatenate(f).reshape((nx,))
+        g = np.concatenate(g).reshape((ne - nc,))
 
         # Evaluate derivatives at each level
         df  = list()
@@ -57,7 +61,7 @@ def dem_eval_err_diff(n: int, d: int, M: HierarchicalGaussianModel, qu: dotdict,
         dg  = list()
         d2g = list()
         for i in range(nl - 1): 
-            xvp = tuple(_ if sum(_.shape) > 0 else torch.Tensor([]) for _ in  (x[i], v[i], qp.p[i], qp.u[i], M[i].pE))
+            xvp = tuple(_ if sum(_.shape) > 0 else np.empty(0) for _ in  (x[i], v[i], qp.p[i], qp.u[i], M[i].pE))
 
             if M[i].df_qup is not None:
                 dfi  = M[i].df_qup(*xvp)
@@ -78,7 +82,7 @@ def dem_eval_err_diff(n: int, d: int, M: HierarchicalGaussianModel, qu: dotdict,
             d2g.append(d2gi)
 
         # Setup df
-        df = dotdict({k: torch.block_diag(*(dfi[k] for dfi in df)) for k in ['dx', 'dv', 'dp']}) 
+        df = dotdict({k: sp.linalg.block_diag(*(dfi[k] for dfi in df)) for k in ['dx', 'dv', 'dp']}) 
 
         # Setup dgdv manually 
         dgdv = cell(nl, nl-1)
@@ -86,24 +90,24 @@ def dem_eval_err_diff(n: int, d: int, M: HierarchicalGaussianModel, qu: dotdict,
             # causes (level i) appear at level i in g(x[i],v[i]) and at level i+1 as -I
             # nb: dg = [dydv[:], dv[0]dv[:], ...]
             dgdv[  i, i] = dg[i].dv 
-            dgdv[i+1, i] = -torch.eye(M[i].m)
+            dgdv[i+1, i] = -np.eye(M[i].m)
 
-        dgdv = torch.tensor(block_matrix(dgdv))
+        dgdv = block_matrix(dgdv)
 
         # Setup dg
-        dg = dotdict({k: torch.block_diag(*(dgi[k] for dgi in dg)) for k in ['dx', 'dp']}) 
+        dg = dotdict({k: sp.linalg.block_diag(*(dgi[k] for dgi in dg)) for k in ['dx', 'dp']}) 
         # add an extra row to accomodate the highest hierarchical level
         for k in dg.keys():
-            dg[k] = torch.cat([dg[k], torch.zeros(nc, dg[k].shape[1])], dim=0)
+            dg[k] = np.concatenate([dg[k], np.zeros((nc, dg[k].shape[1]))], axis=0)
         dg.dv = dgdv
 
         # Reshape df and dg to avoid errors laters
         df.dx = df.dx.reshape((nx, nx))
         df.dv = df.dv.reshape((nx, nv))
-        df.dp = df.dp.reshape((nx, np))
+        df.dp = df.dp.reshape((nx, nP))
         dg.dx = dg.dx.reshape((ne, nx))
         dg.dv = dg.dv.reshape((ne, nv))
-        dg.dp = dg.dp.reshape((ne, np))
+        dg.dp = dg.dp.reshape((ne, nP))
 
 
         # Process d2f, d2g
@@ -111,67 +115,67 @@ def dem_eval_err_diff(n: int, d: int, M: HierarchicalGaussianModel, qu: dotdict,
         d2g = dotdict({i: dotdict({j: [d2gk[i][j] for d2gk in d2g] for j in ['dx', 'dv', 'dp']}) for i in ['dx', 'dv', 'dp']}) 
 
 
-        if np > 0:
-            dfdxp = torch.stack([torch.block_diag(*(_[:, ip] for _ in d2f.dp.dx if torch.numel(_) > 0)) for ip in range(np)], dim=0)
-            dfdvp = torch.stack([torch.block_diag(*(_[:, ip] for _ in d2f.dp.dv if torch.numel(_) > 0)) for ip in range(np)], dim=0)
+        if nP > 0:
+            dfdxp = np.stack([sp.linalg.block_diag(*(_[:, ip] for _ in d2f.dp.dx if _.size > 0)) for ip in range(nP)], axis=0)
+            dfdvp = np.stack([sp.linalg.block_diag(*(_[:, ip] for _ in d2f.dp.dv if _.size > 0)) for ip in range(nP)], axis=0)
 
-            dgdvp = torch.stack([torch.block_diag(*(_[:, ip] for _ in d2g.dp.dv if torch.numel(_) > 0)) for ip in range(np)], dim=0)
-            dgdxp = torch.stack([torch.block_diag(*(_[:, ip] for _ in d2g.dp.dx if torch.numel(_) > 0)) for ip in range(np)], dim=0)
+            dgdvp = np.stack([sp.linalg.block_diag(*(_[:, ip] for _ in d2g.dp.dv if _.size > 0)) for ip in range(nP)], axis=0)
+            dgdxp = np.stack([sp.linalg.block_diag(*(_[:, ip] for _ in d2g.dp.dx if _.size > 0)) for ip in range(nP)], axis=0)
 
-            dgdxp = [torch.block_diag(*(_[:, ip] for _ in d2g.dp.dx if torch.numel(_) > 0)) for ip in range(np)]
-            dgdvp = [torch.block_diag(*(_[:, ip] for _ in d2g.dp.dv if torch.numel(_) > 0)) for ip in range(np)]
+            dgdxp = [sp.linalg.block_diag(*(_[:, ip] for _ in d2g.dp.dx if _.size > 0)) for ip in range(nP)]
+            dgdvp = [sp.linalg.block_diag(*(_[:, ip] for _ in d2g.dp.dv if _.size > 0)) for ip in range(nP)]
 
             # Add a component with nc rows to accomodate the highest hierarchical level
-            dgdxp = torch.stack([torch.cat([dgdxpi, torch.zeros(nc, dgdxpi.shape[1])]) for dgdxpi in dgdxp], dim=0)
-            dgdvp = torch.stack([torch.cat([dgdvpi, torch.zeros(nc, dgdvpi.shape[1])]) for dgdvpi in dgdvp], dim=0)
+            dgdxp = np.stack([np.concatenate([dgdxpi, np.zeros((nc, dgdxpi.shape[1]))]) for dgdxpi in dgdxp], axis=0)
+            dgdvp = np.stack([np.concatenate([dgdvpi, np.zeros((nc, dgdvpi.shape[1]))]) for dgdvpi in dgdvp], axis=0)
 
-            dfdxp = dfdxp.reshape((np, nx, nx))
-            dfdvp = dfdvp.reshape((np, nx, nv))
-            dgdxp = dgdxp.reshape((np, ne, nx))
-            dgdvp = dgdvp.reshape((np, ne, nv))
+            dfdxp = dfdxp.reshape((nP, nx, nx))
+            dfdvp = dfdvp.reshape((nP, nx, nv))
+            dgdxp = dgdxp.reshape((nP, ne, nx))
+            dgdvp = dgdvp.reshape((nP, ne, nv))
         else: 
-            dfdxp = torch.empty((np, nx, nx))
-            dfdvp = torch.empty((np, nx, nv))
-            dgdxp = torch.empty((np, ne, nx))
-            dgdvp = torch.empty((np, ne, nv))
+            dfdxp = np.empty((nP, nx, nx))
+            dfdvp = np.empty((nP, nx, nv))
+            dgdxp = np.empty((nP, ne, nx))
+            dgdvp = np.empty((nP, ne, nv))
 
         if nx > 0: 
-            dfdpx = torch.stack([torch.block_diag(*(_[:, ix] for _ in d2f.dx.dp if torch.numel(_) > 0)) for ix in range(nx)], dim=0)
-            dgdpx = [torch.block_diag(*(_[:, ix] for _ in d2g.dx.dp if torch.numel(_) > 0)) for ix in range(nx)]
+            dfdpx = np.stack([sp.linalg.block_diag(*(_[:, ix] for _ in d2f.dx.dp if _.size > 0)) for ix in range(nx)], axis=0)
+            dgdpx = [sp.linalg.block_diag(*(_[:, ix] for _ in d2g.dx.dp if _.size > 0)) for ix in range(nx)]
 
             # Add a component with nc rows to accomodate the highest hierarchical level
-            dgdpx = torch.stack([torch.cat([dgdpxi, torch.zeros(nc, dgdpxi.shape[1])]) for dgdpxi in dgdpx], dim=0)
+            dgdpx = np.stack([np.concatenate([dgdpxi, np.zeros((nc, dgdpxi.shape[1]))]) for dgdpxi in dgdpx], axis=0)
 
-            dfdpx = dfdpx.reshape((nx, nx, np))
-            dgdpx = dgdpx.reshape((nx, ne, np))
+            dfdpx = dfdpx.reshape((nx, nx, nP))
+            dgdpx = dgdpx.reshape((nx, ne, nP))
         else: 
-            dfdpx = torch.empty((nx, nx, np))
-            dgdpx = torch.empty((nx, ne, np))
+            dfdpx = np.empty((nx, nx, nP))
+            dgdpx = np.empty((nx, ne, nP))
 
         if nv > 0: 
-            dfdpv = torch.stack([torch.block_diag(*(_[:, iv] for _ in d2f.dv.dp if torch.numel(_) > 0)) for iv in range(nv)], dim=0)
-            dgdpv = [torch.block_diag(*(_[:, iv] for _ in d2g.dv.dp if torch.numel(_) > 0)) for iv in range(nv)]
+            dfdpv = np.stack([sp.linalg.block_diag(*(_[:, iv] for _ in d2f.dv.dp if _.size > 0)) for iv in range(nv)], axis=0)
+            dgdpv = [sp.linalg.block_diag(*(_[:, iv] for _ in d2g.dv.dp if _.size > 0)) for iv in range(nv)]
 
             # Add a component with nc rows to accomodate the highest hierarchical level
-            dgdpv = torch.stack([torch.cat([dgdpvi, torch.zeros(1, dgdpvi.shape[1])]) for dgdpvi in dgdpv], dim=0)
+            dgdpv = np.stack([np.concatenate([dgdpvi, np.zeros((1, dgdpvi.shape[1]))]) for dgdpvi in dgdpv], axis=0)
 
-            dfdpv = dfdpv.reshape((nv, nx, np))
-            dgdpv = dgdpv.reshape((nv, ne, np))
+            dfdpv = dfdpv.reshape((nv, nx, nP))
+            dgdpv = dgdpv.reshape((nv, ne, nP))
         else: 
-            dfdpv = torch.empty((nv, nx, np))
-            dgdpv = torch.empty((nv, ne, np))
+            dfdpv = np.empty((nv, nx, nP))
+            dgdpv = np.empty((nv, ne, nP))
         
 
-        dfdpu = torch.cat([dfdpx, dfdpv], dim=0)
-        dgdpu = torch.cat([dgdpx, dgdpv], dim=0)
+        dfdpu = np.concatenate([dfdpx, dfdpv], axis=0)
+        dgdpu = np.concatenate([dgdpx, dgdpv], axis=0)
 
         de    = dotdict(
-          dy  = torch.eye(ne, ny), 
-          dc  = torch.diag(-torch.ones(max(ne, nc) - (nc - ne)), nc - ne)[:ne, :nc]
+          dy  = np.eye(ne, ny), 
+          dc  = np.diag(-np.ones(max(ne, nc) - (nc - ne)), nc - ne)[:ne, :nc]
         )
 
         # Prediction error (E) - causes        
-        Ev = [torch.cat([qu.y[0], qu.v[0]]) -  torch.cat([g, qu.u[0]])]
+        Ev = [np.concatenate([qu.y[0], qu.v[0]]) -  np.concatenate([g, qu.u[0]])]
         for i in range(1, n):
             Evi = de.dy @ qu.y[i] + de.dc @ qu.u[i] - dg.dx @ qu.x[i] - dg.dv @ qu.v[i]
             Ev.append(Evi)
@@ -181,79 +185,78 @@ def dem_eval_err_diff(n: int, d: int, M: HierarchicalGaussianModel, qu: dotdict,
         for i in range(1, n-1):
             Exi = qu.x[i + 1] - df.dx @ qu.x[i] - df.dv @ qu.v[i]
             Ex.append(Exi)
-        Ex.append(torch.zeros_like(Exi))
+        Ex.append(np.zeros_like(Exi))
 
-        Ev = torch.cat(Ev)
-        Ex = torch.cat(Ex)
-        E  = torch.cat([Ev, Ex]).unsqueeze(1) 
+        Ev = np.concatenate(Ev)
+        Ex = np.concatenate(Ex)
+        E  = np.concatenate([Ev, Ex])[:, None]
 
         # generalised derivatives
         dgdp = [dg.dp]
         dfdp = [df.dp]
 
-        qux = qu.x.unsqueeze(-1)
-        quv = qu.v.unsqueeze(-1)
+        qux = qu.x[..., None]
+        quv = qu.v[..., None]
         for i in range(1, n):
-            dgdpi = dg.dp.clone()
-            dfdpi = df.dp.clone()
+            dgdpi = dg.dp.copy()
+            dfdpi = df.dp.copy()
 
-            for ip in range(np): 
+            for ip in range(nP): 
                 dgdpi[:, ip] = (dgdxp[ip] @ qux[i] + dgdvp[ip] @ quv[i]).squeeze(1)
                 dfdpi[:, ip] = (dfdxp[ip] @ qux[i] + dfdvp[ip] @ quv[i]).squeeze(1)
             
             dfdp.append(dfdpi)
             dgdp.append(dgdpi)
 
-        df.dp = torch.cat(dfdp)
-        dg.dp = torch.cat(dgdp)
+        df.dp = np.concatenate(dfdp)
+        dg.dp = np.concatenate(dgdp)
 
-        de.dy               = torch.kron(torch.eye(n, n), de.dy)
-        df.dy               = torch.kron(torch.eye(n, n), torch.zeros(nx, ny))
-        df.dc               = torch.zeros(n*nx, n*nc)
-        dg.dx               = torch.kron(torch.eye(n, n), dg.dx)
+        de.dy               = np.kron(np.eye(n, n), de.dy)
+        df.dy               = np.kron(np.eye(n, n), np.zeros((nx, ny)))
+        df.dc               = np.zeros((n*nx, n*nc))
+        dg.dx               = np.kron(np.eye(n, n), dg.dx)
         # df.dx = (I * df.dx) - D, Eq. 45
-        df.dx               = torch.kron(torch.eye(n, n), df.dx) - torch.kron(torch.diag(torch.ones(n - 1), 1), torch.eye(nx, nx)) 
+        df.dx               = np.kron(np.eye(n, n), df.dx) - np.kron(np.diag(np.ones(n - 1), 1), np.eye(nx, nx)) 
 
         # embed to n >= d
-        dedc                = torch.zeros(n*ne, n*nc) 
-        dedc[:n*ne,:d*nc]   = torch.kron(torch.eye(n, d), de.dc)
+        dedc                = np.zeros((n*ne, n*nc)) 
+        dedc[:n*ne,:d*nc]   = np.kron(np.eye(n, d), de.dc)
         de.dc               = dedc
 
-        dgdv                = torch.zeros(n*ne, n*nv)
-        dgdv[:n*ne,:d*nv]   = torch.kron(torch.eye(n, d), dg.dv)
+        dgdv                = np.zeros((n*ne, n*nv))
+        dgdv[:n*ne,:d*nv]   = np.kron(np.eye(n, d), dg.dv)
         dg.dv               = dgdv
 
-        dfdv                = torch.zeros(n*nx, n*nv)
-        dfdv[:n*nx,:d*nv]   = torch.kron(torch.eye(n, d), df.dv)
+        dfdv                = np.zeros((n*nx, n*nv))
+        dfdv[:n*nx,:d*nv]   = np.kron(np.eye(n, d), df.dv)
         df.dv               = dfdv
 
         dE    = dotdict()
-        dE.dy = torch.cat([de.dy, df.dy])
-        dE.dc = torch.cat([de.dc, df.dc])
-        dE.dp = - torch.cat([dg.dp, df.dp])
-        dE.du = - torch.Tensor(block_matrix([
+        dE.dy = np.concatenate([de.dy, df.dy])
+        dE.dc = np.concatenate([de.dc, df.dc])
+        dE.dp = - np.concatenate([dg.dp, df.dp])
+        dE.du = - block_matrix([
                 [dg.dx, dg.dv], 
-                [df.dx, df.dv]]))
+                [df.dx, df.dv]])
 
         dE.dup = []
-        for ip in range(np): 
-            dfdxpi              = torch.kron(torch.eye(n,n), dfdxp[ip])
-            dgdxpi              = torch.kron(torch.eye(n,n), dgdxp[ip])
-            dfdvpi              = torch.zeros(n*nx, n*nv)
-            dfdvpi[:,:d*nv]     = torch.kron(torch.eye(n,d), dfdvp[ip])
-            dgdvpi              = torch.zeros(n*ne, n*nv)
-            dgdvpi[:,:d*nv]     = torch.kron(torch.eye(n,d), dgdvp[ip])
+        for ip in range(nP): 
+            dfdxpi              = np.kron(np.eye(n,n), dfdxp[ip])
+            dgdxpi              = np.kron(np.eye(n,n), dgdxp[ip])
+            dfdvpi              = np.zeros((n*nx, n*nv))
+            dfdvpi[:,:d*nv]     = np.kron(np.eye(n,d), dfdvp[ip])
+            dgdvpi              = np.zeros((n*ne, n*nv))
+            dgdvpi[:,:d*nv]     = np.kron(np.eye(n,d), dgdvp[ip])
 
-            dEdupi = -torch.Tensor(block_matrix([[dgdxpi, dgdvpi], 
-                                                 [dfdxpi, dfdvpi]]))
+            dEdupi = -block_matrix([[dgdxpi, dgdvpi], [dfdxpi, dfdvpi]])
             dE.dup.append(dEdupi)
 
         dE.dpu = [] 
         for i in range(n): 
             for iu in range(nx + nv):
-                dfdpui = torch.kron(torch.eye(n,1), dfdpu[iu])
-                dgdpui = torch.kron(torch.eye(n,1), dgdpu[iu])
-                dEdpui = torch.cat([dgdpui, dfdpui], dim=0)
+                dfdpui = np.kron(np.eye(n,1), dfdpu[iu])
+                dgdpui = np.kron(np.eye(n,1), dgdpu[iu])
+                dEdpui = np.concatenate([dgdpui, dfdpui], axis=0)
 
                 dE.dpu.append(dEdpui)
 
