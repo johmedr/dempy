@@ -1,5 +1,6 @@
 from typing import Tuple
 import torch 
+import sympy
 
 from .dem_structs import *
 
@@ -77,3 +78,67 @@ def compute_dx(f, dfdx, t, isreg=False):
     dx = torch.linalg.matrix_exp(J)
     return dx[1:, 0, None]
 
+
+def compute_sym_df_d2f(func, n, m, p, cast_to=np.ndarray):
+    """ 
+    Use symbolic differentiation to compute jacobian and hessian of a function of 3 vectors. 
+     - func: if the function to differentiate (must return a vector, ie a tensor (l, ...) where ... are empty or 1's)
+     - n: dimension of the first argument
+     - m: dimension of the second argument
+     - p: dimension of the third argument
+    Returns: (df, d2f) where: 
+     - df.dx, df.dv, and df.dp contains the jacobians wrt each argument
+     - d2f.dx.dx, ... contains the ndim-hessians wrt each pair of arguments
+    """
+    if cast_to == np.ndarray: 
+        cast = lambda x: np.array(x, dtype=np.float64)
+    elif cast_to == torch.tensor: 
+        cast = lambda x: torch.from_numpy(np.array(x, dtype=np.float64))
+    elif callable(cast_to):
+        cast = cast_to
+    else: raise NotImplementedError()
+    
+    x  = np.array(sympy.symbols(f'x0:{n}')).reshape((n, 1))
+    v  = np.array(sympy.symbols(f'v0:{m}')).reshape((m, 1))
+    p  = np.array(sympy.symbols(f'p0:{p}')).reshape((p, 1))
+
+    fxvp = sympy.Matrix(func(x, v, p))
+    l = fxvp.shape[0]
+    
+    var  = [('dx', x), ('dv', v), ('dp', p)]
+
+    dfsymb  = dotdict({
+        d: fxvp.jacobian(sym)
+        for d, sym in var
+    })
+
+    df  = cdotdict()
+    d2f = cdotdict()
+
+    for i, (d1, sym1) in enumerate(var):
+        if d1 not in d2f.keys():
+            d2f[d1] = cdotdict()
+            
+        for j, (d2, sym2) in enumerate(var): 
+            if j < i: continue
+            if d2 not in d2f.keys(): 
+                d2f[d2] = cdotdict()
+
+            h  = sympy.MutableDenseNDimArray((dfsymb[d1].reshape(l * sym1.shape[0], 1).jacobian(sym2)))
+            h  = h.reshape(l, sym1.shape[0], sym2.shape[0])
+            ht = sympy.permutedims(h, (0, 2, 1))
+            
+            if len(h.free_symbols) > 0: 
+                d2f[d1][d2] = lambda x_, v_, p_, symb_=h : cast(sympy.lambdify((x, v, p), symb_, 'numpy')(x_, v_, p_))
+                d2f[d2][d1] = lambda x_, v_, p_, symb_=ht: cast(sympy.lambdify((x, v, p), symb_, 'numpy')(x_, v_, p_))
+            else:
+                d2f[d1][d2] = cast(h)
+                d2f[d2][d1] = cast(ht)
+                
+        if len(dfsymb[d1].free_symbols) > 0:
+            df[d1] = lambda x_, v_, p_, symb_=dfsymb[d1]: cast(sympy.lambdify((x, v, p), symb_, 'numpy')(x_, v_, p_))
+        else: 
+            df[d1] = cast(dfsymb[d1])
+        
+    return df, d2f
+    

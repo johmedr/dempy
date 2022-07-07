@@ -6,6 +6,14 @@ class dotdict(dict):
     __setattr__ = dict.__setitem__
     __delattr__ = dict.__delitem__
 
+class cdotdict(dotdict):
+    """callable dot dict""" 
+    def __call__(self, *args, **kwargs):
+        return dotdict({
+            k: v(*args, **kwargs) if callable(v) else v
+            for k, v in self.items()
+        })
+
 def block_matrix(nested_lists): 
     # a is a list of list [[[], [], tensor], [[], tensor, []], [tensor, [], []]]
     # row and column size must be similar
