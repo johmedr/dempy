@@ -215,8 +215,8 @@ class DEMInversion:
         for i in range(nl):
             v0.append(np.zeros((M[i].l, M[i].l)))
             w0.append(np.zeros((M[i].n, M[i].n)))
-        V0 = np.kron(np.zeros((n,n)), sp.linalg.block_diag(*v0))
-        W0 = np.kron(np.zeros((n,n)), sp.linalg.block_diag(*w0))
+        V0 = kron(np.zeros((n,n)), sp.linalg.block_diag(*v0))
+        W0 = kron(np.zeros((n,n)), sp.linalg.block_diag(*w0))
         Qp = sp.linalg.block_diag(V0, W0)
 
         # Qp is: 
@@ -236,13 +236,13 @@ class DEMInversion:
             for j in range(len(M[i].Q)): 
                 q    = list(*v0)
                 q[i] = M[i].Q[j]
-                Q.append(sp.linalg.block_diag(np.kron(iVv, sp.linalg.block_diag(*q)), W0))
+                Q.append(sp.linalg.block_diag(kron(iVv, sp.linalg.block_diag(*q)), W0))
 
             # and fixed components (V) 
             # ------------------------
             q    = list(v0)
             q[i] = M[i].V
-            Qp  += sp.linalg.block_diag(np.kron(iVv, sp.linalg.block_diag(*q)), W0)
+            Qp  += sp.linalg.block_diag(kron(iVv, sp.linalg.block_diag(*q)), W0)
 
 
             # noise on hidden states (R)
@@ -250,13 +250,13 @@ class DEMInversion:
             for j in range(len(M[i].R)): 
                 q    = list(*w0)
                 q[i] = M[i].R[j]
-                Q.append(sp.linalg.block_diag(V0, np.kron(iVw, sp.linalg.block_diag(*q))))
+                Q.append(sp.linalg.block_diag(V0, kron(iVw, sp.linalg.block_diag(*q))))
 
             # and fixed components (W) 
             # ------------------------
             q    = list(w0)
             q[i] = M[i].W
-            Qp  += sp.linalg.block_diag(V0, np.kron(iVw, sp.linalg.block_diag(*q)))
+            Qp  += sp.linalg.block_diag(V0, kron(iVw, sp.linalg.block_diag(*q)))
 
         # number of hyperparameters
         # -------------------------
@@ -265,9 +265,9 @@ class DEMInversion:
         # fixed priors on states (u) 
         # --------------------------
         xP              =   sp.linalg.block_diag(*(M[i].xP for i in range(nl)))
-        Px              =   np.kron(DEMInversion.generalized_covariance(n, 0), xP)
+        Px              =   kron(DEMInversion.generalized_covariance(n, 0), xP)
         Pv              =   np.zeros((n*nv,n*nv))
-        Pv[:d*nv,:d*nv] =   np.kron(DEMInversion.generalized_covariance(d, 0), np.zeros((nv, nv)))
+        Pv[:d*nv,:d*nv] =   kron(DEMInversion.generalized_covariance(d, 0), np.zeros((nv, nv)))
         Pu              =   sp.linalg.block_diag(Px, Pv)
         Pu[:nu,:nu]     =   Pu[:nu,:nu] + np.eye(nu, nu) * nu * np.finfo(np.float32).eps
 
@@ -344,12 +344,12 @@ class DEMInversion:
 
         # derivatives for Jacobian of D-step 
         # ----------------------------------
-        Dx              = np.kron(np.diag(np.ones((n-1,)), 1), np.eye(nx))
-        Dv              = np.kron(           np.zeros((n, n)), np.eye(nv))
-        Dv[:nv*d,:nv*d] = np.kron(np.diag(np.ones((d-1,)), 1), np.eye(nv))
-        Dy              = np.kron(np.diag(np.ones((n-1,)), 1), np.eye(ny))
-        Dc              = np.kron(           np.zeros((n, n)), np.eye(nv))
-        Dc[:nc*d,:nc*d] = np.kron(np.diag(np.ones((d-1,)), 1), np.eye(nc))
+        Dx              = kron(np.diag(np.ones((n-1,)), 1), np.eye(nx))
+        Dv              = kron(           np.zeros((n, n)), np.eye(nv))
+        Dv[:nv*d,:nv*d] = kron(np.diag(np.ones((d-1,)), 1), np.eye(nv))
+        Dy              = kron(np.diag(np.ones((n-1,)), 1), np.eye(ny))
+        Dc              = kron(           np.zeros((n, n)), np.eye(nv))
+        Dc[:nc*d,:nc*d] = kron(np.diag(np.ones((d-1,)), 1), np.eye(nc))
         D               = sp.linalg.block_diag(Dx, Dv, Dy, Dc)
 
         # and null blocks
@@ -755,10 +755,10 @@ class DEMInversion:
         V[0, 0] = np.concatenate([m.v for m in M if m.l > 0], axis=0)
 
         # Derivatives operators
-        Dx = np.kron(np.diag(np.ones((n-1,)), 1), np.eye(nx));
-        Dv = np.kron(np.diag(np.ones((n-1,)), 1), np.eye(nv));
+        Dx = kron(np.diag(np.ones((n-1,)), 1), np.eye(nx));
+        Dv = kron(np.diag(np.ones((n-1,)), 1), np.eye(nv));
         D  = sp.linalg.block_diag(Dv, Dx, Dv, Dx)
-        dfdw  = np.kron(np.eye(n),np.eye(nx));
+        dfdw  = kron(np.eye(n),np.eye(nx));
 
         xt = X[0]
         vt = V[0]
@@ -852,10 +852,10 @@ class DEMInversion:
                 v[i]   = dgdx @ x[i] + dgdv @ v[i] + z[i]
                 x[i+1] = dfdx @ x[i] + dfdv @ v[i] + w[i]
             
-            dgdv = np.kron(np.diag(np.ones((n-1,)),1), dgdv)
-            dgdx = np.kron(np.diag(np.ones((n-1,)),1), dgdx)
-            dfdv = np.kron(np.eye(n), dfdv)
-            dfdx = np.kron(np.eye(n), dfdx)
+            dgdv = kron(np.diag(np.ones((n-1,)),1), dgdv)
+            dgdx = kron(np.diag(np.ones((n-1,)),1), dgdx)
+            dfdv = kron(np.eye(n), dfdv)
+            dfdx = kron(np.eye(n), dfdx)
 
             # Save realization
             V[t] = v

@@ -216,24 +216,24 @@ def dem_eval_err_diff(n: int, d: int, M: HierarchicalGaussianModel, qu: dotdict,
         df.dp = np.concatenate(dfdp)
         dg.dp = np.concatenate(dgdp)
 
-        de.dy               = np.kron(np.eye(n, n), de.dy)
-        df.dy               = np.kron(np.eye(n, n), np.zeros((nx, ny)))
+        de.dy               = kron(np.eye(n, n), de.dy)
+        df.dy               = kron(np.eye(n, n), np.zeros((nx, ny)))
         df.dc               = np.zeros((n*nx, n*nc))
-        dg.dx               = np.kron(np.eye(n, n), dg.dx)
+        dg.dx               = kron(np.eye(n, n), dg.dx)
         # df.dx = (I * df.dx) - D, Eq. 45
-        df.dx               = np.kron(np.eye(n, n), df.dx) - np.kron(np.diag(np.ones(n - 1), 1), np.eye(nx, nx)) 
+        df.dx               = kron(np.eye(n, n), df.dx) - kron(np.diag(np.ones(n - 1), 1), np.eye(nx, nx)) 
 
         # embed to n >= d
         dedc                = np.zeros((n*ne, n*nc)) 
-        dedc[:n*ne,:d*nc]   = np.kron(np.eye(n, d), de.dc)
+        dedc[:n*ne,:d*nc]   = kron(np.eye(n, d), de.dc)
         de.dc               = dedc
 
         dgdv                = np.zeros((n*ne, n*nv))
-        dgdv[:n*ne,:d*nv]   = np.kron(np.eye(n, d), dg.dv)
+        dgdv[:n*ne,:d*nv]   = kron(np.eye(n, d), dg.dv)
         dg.dv               = dgdv
 
         dfdv                = np.zeros((n*nx, n*nv))
-        dfdv[:n*nx,:d*nv]   = np.kron(np.eye(n, d), df.dv)
+        dfdv[:n*nx,:d*nv]   = kron(np.eye(n, d), df.dv)
         df.dv               = dfdv
 
         dE    = dotdict()
@@ -246,12 +246,12 @@ def dem_eval_err_diff(n: int, d: int, M: HierarchicalGaussianModel, qu: dotdict,
 
         dE.dup = []
         for ip in range(nP): 
-            dfdxpi              = np.kron(np.eye(n,n), dfdxp[ip])
-            dgdxpi              = np.kron(np.eye(n,n), dgdxp[ip])
+            dfdxpi              = kron(np.eye(n,n), dfdxp[ip])
+            dgdxpi              = kron(np.eye(n,n), dgdxp[ip])
             dfdvpi              = np.zeros((n*nx, n*nv))
-            dfdvpi[:,:d*nv]     = np.kron(np.eye(n,d), dfdvp[ip])
+            dfdvpi[:,:d*nv]     = kron(np.eye(n,d), dfdvp[ip])
             dgdvpi              = np.zeros((n*ne, n*nv))
-            dgdvpi[:,:d*nv]     = np.kron(np.eye(n,d), dgdvp[ip])
+            dgdvpi[:,:d*nv]     = kron(np.eye(n,d), dgdvp[ip])
 
             dEdupi = -block_matrix([[dgdxpi, dgdvpi], [dfdxpi, dfdvpi]])
             dE.dup.append(dEdupi)
@@ -259,8 +259,8 @@ def dem_eval_err_diff(n: int, d: int, M: HierarchicalGaussianModel, qu: dotdict,
         dE.dpu = [] 
         for i in range(n): 
             for iu in range(nx + nv):
-                dfdpui = np.kron(np.eye(n,1), dfdpu[iu])
-                dgdpui = np.kron(np.eye(n,1), dgdpu[iu])
+                dfdpui = kron(np.eye(n,1), dfdpu[iu])
+                dgdpui = kron(np.eye(n,1), dgdpu[iu])
                 dEdpui = np.concatenate([dgdpui, dfdpui], axis=0)
 
                 dE.dpu.append(dEdpui)
