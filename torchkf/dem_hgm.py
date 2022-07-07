@@ -1,6 +1,7 @@
 import torch
 
 from .dem_structs import *
+from .dem_dx import compute_sym_df_d2f
 
 class GaussianModel(dotdict): 
     def __init__(self, 

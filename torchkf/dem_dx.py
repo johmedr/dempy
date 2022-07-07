@@ -79,13 +79,11 @@ def compute_dx(f, dfdx, t, isreg=False):
     return dx[1:, 0, None]
 
 
-def compute_sym_df_d2f(func, n, m, p, cast_to=np.ndarray):
+def compute_sym_df_d2f(func, *dims, input_keys=None, cast_to=np.ndarray):
     """ 
     Use symbolic differentiation to compute jacobian and hessian of a function of 3 vectors. 
      - func: if the function to differentiate (must return a vector, ie a tensor (l, ...) where ... are empty or 1's)
-     - n: dimension of the first argument
-     - m: dimension of the second argument
-     - p: dimension of the third argument
+     - dims: a list of tuple containing the dimensions of each argument
     Returns: (df, d2f) where: 
      - df.dx, df.dv, and df.dp contains the jacobians wrt each argument
      - d2f.dx.dx, ... contains the ndim-hessians wrt each pair of arguments
@@ -97,29 +95,50 @@ def compute_sym_df_d2f(func, n, m, p, cast_to=np.ndarray):
     elif callable(cast_to):
         cast = cast_to
     else: raise NotImplementedError()
+        
+    if input_keys is None: 
+        import string
+        input_keys = string.ascii_lowercase[:len(dims)]
+    else: 
+        assert(len(dims) == len(input_keys))
     
-    x  = np.array(sympy.symbols(f'x0:{n}')).reshape((n, 1))
-    v  = np.array(sympy.symbols(f'v0:{m}')).reshape((m, 1))
-    p  = np.array(sympy.symbols(f'p0:{p}')).reshape((p, 1))
+    dims = [(dim,) if isinstance(dim, int) else dim for dim in dims]
+    
+    # Squeeze column vectors
+    squeezedims = [dim if len(dim) == 1 or dim[1] != 1 else (dim[0],) for dim in dims]
+    
+    # compute flat dimension 
+    flatdims = [math.prod(dim) for dim in dims]
+    
+    # create flat variables
+    flatvar = [
+        (f'd{k}', np.array(sympy.symbols(f'{k}0:{n}'))) 
+        for k, n in zip(input_keys, flatdims)
+    ]
+    
+    var = [
+        (f'd{k}', np.array(sympy.symbols(f'{k}0:{n}')).reshape(dim))
+        for k, n, dim in zip(input_keys, flatdims, dims)
+    ]
+    
+    args = [v[1] for v in var]
 
-    fxvp = sympy.Matrix(func(x, v, p))
+    fxvp = sympy.Matrix(func(*args))
     l = fxvp.shape[0]
-    
-    var  = [('dx', x), ('dv', v), ('dp', p)]
 
     dfsymb  = dotdict({
         d: fxvp.jacobian(sym)
-        for d, sym in var
+        for d, sym in flatvar
     })
 
     df  = cdotdict()
     d2f = cdotdict()
 
-    for i, (d1, sym1) in enumerate(var):
+    for i, (d1, sym1) in enumerate(flatvar):
         if d1 not in d2f.keys():
             d2f[d1] = cdotdict()
             
-        for j, (d2, sym2) in enumerate(var): 
+        for j, (d2, sym2) in enumerate(flatvar): 
             if j < i: continue
             if d2 not in d2f.keys(): 
                 d2f[d2] = cdotdict()
@@ -128,17 +147,27 @@ def compute_sym_df_d2f(func, n, m, p, cast_to=np.ndarray):
             h  = h.reshape(l, sym1.shape[0], sym2.shape[0])
             ht = sympy.permutedims(h, (0, 2, 1))
             
+            h  = sympy.Matrix(h.reshape(l, sym1.shape[0]*sym2.shape[0]))
+            ht = sympy.Matrix(h.reshape(l, sym1.shape[0]*sym2.shape[0]))
+            
             if len(h.free_symbols) > 0: 
-                d2f[d1][d2] = lambda x_, v_, p_, symb_=h : cast(sympy.lambdify((x, v, p), symb_, 'numpy')(x_, v_, p_))
-                d2f[d2][d1] = lambda x_, v_, p_, symb_=ht: cast(sympy.lambdify((x, v, p), symb_, 'numpy')(x_, v_, p_))
+                d2f[d1][d2] = lambda *_args, _symb=h, _target_shape=(l, *squeezedims[i], *squeezedims[j]):\
+                    cast(sympy.lambdify(args, _symb, 'numpy')(*_args)).reshape(_target_shape)
+                d2f[d2][d1] = lambda *_args, _symb=ht, _target_shape=(l, *squeezedims[j], *squeezedims[i]):\
+                    cast(sympy.lambdify(args, _symb, 'numpy')(*_args)).reshape(_target_shape)
             else:
-                d2f[d1][d2] = cast(h)
-                d2f[d2][d1] = cast(ht)
+                d2f[d1][d2] = lambda *_args, _symb=h, _target_shape=(l, *squeezedims[i], *squeezedims[j]):\
+                    cast(_symb).reshape(_target_shape)
+                d2f[d2][d1] = lambda *_args, _symb=ht, _target_shape=(l, *squeezedims[j], *squeezedims[i]):\
+                    cast(_symb).reshape(_target_shape)
                 
-        if len(dfsymb[d1].free_symbols) > 0:
-            df[d1] = lambda x_, v_, p_, symb_=dfsymb[d1]: cast(sympy.lambdify((x, v, p), symb_, 'numpy')(x_, v_, p_))
+        j = dfsymb[d1]
+        if len(j.free_symbols) > 0:
+            df[d1] = lambda *_args, _symb=j, _target_shape=(l, *squeezedims[i]): \
+                cast(sympy.lambdify(args, _symb, 'numpy')(*_args)).reshape(_target_shape)
         else: 
-            df[d1] = cast(dfsymb[d1])
+            df[d1] = lambda *_args, _symb=j, _target_shape=(l, *squeezedims[i]): \
+                cast(_symb).reshape(_target_shape)
         
     return df, d2f
     
