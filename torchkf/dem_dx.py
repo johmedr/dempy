@@ -93,7 +93,7 @@ from sympy.utilities.autowrap import autowrap
 import itertools
 
 
-def compute_sym_df_d2f(func, *dims, input_keys=None, wrt=None, cast_to=np.ndarray):
+def compute_sym_df_d2f(func, *dims, input_keys=None, wrt=None, cast_to=np.ndarray, wrap_type='lambdify'):
     """ 
     Use symbolic differentiation to compute jacobian and hessian of a function of 3 vectors. 
      - func: if the function to differentiate (must return a vector, ie a tensor (l, ...) where ... are empty or 1's)
@@ -186,24 +186,35 @@ def compute_sym_df_d2f(func, *dims, input_keys=None, wrt=None, cast_to=np.ndarra
             ht = sympy.Matrix(h.reshape(l, sym1.shape[0]*sym2.shape[0]))
             
             if len(h.free_symbols) > 0: 
+                if wrap_type == 'autowrap':
+                    func_h  = autowrap(h, args=symargs)
+                    func_ht = autowrap(ht, args=symargs)
+                elif wrap_type == 'lambdify': 
+                    func_h  = sympy.lambdify(symargs, h, 'numpy')
+                    func_ht = sympy.lambdify(symargs, ht, 'numpy')
 
-                d2f[d1][d2] = lambda *_args, _func=autowrap(h, args=symargs), _target_shape=(l, *squeezedims[i], *squeezedims[j]):\
-                    cast(_func(*_args)).reshape(_target_shape)
-                d2f[d2][d1] = lambda *_args, _func=autowrap(ht, args=symargs), _target_shape=(l, *squeezedims[j], *squeezedims[i]):\
-                    cast(_func(*_args)).reshape(_target_shape)
+                d2f[d1][d2] = lambda *_args, _func=func_h, _target_shape=(l, *squeezedims[i], *squeezedims[j]):\
+                    _func(*_args).reshape(_target_shape)
+                d2f[d2][d1] = lambda *_args, _func=func_ht, _target_shape=(l, *squeezedims[j], *squeezedims[i]):\
+                    _func(*_args).reshape(_target_shape)
             else:
-                d2f[d1][d2] = lambda *_args, _symb=h, _target_shape=(l, *squeezedims[i], *squeezedims[j]):\
-                    cast(_symb).reshape(_target_shape)
-                d2f[d2][d1] = lambda *_args, _symb=ht, _target_shape=(l, *squeezedims[j], *squeezedims[i]):\
-                    cast(_symb).reshape(_target_shape)
+                d2f[d1][d2] = lambda *_args, _symb=cast(h), _target_shape=(l, *squeezedims[i], *squeezedims[j]):\
+                    _symb.reshape(_target_shape)
+                d2f[d2][d1] = lambda *_args, _symb=cast(ht), _target_shape=(l, *squeezedims[j], *squeezedims[i]):\
+                    _symb.reshape(_target_shape)
                 
         J = dfsymb[d1]
         if len(J.free_symbols) > 0:
-            df[d1] = lambda *_args, _func=autowrap(J, args=symargs), _target_shape=(l, *squeezedims[i]): \
-                cast(_func(*_args)).reshape(_target_shape)
+            if wrap_type == 'autowrap':
+                func_J  = autowrap(J, args=symargs)
+            elif wrap_type == 'lambdify': 
+                func_J  = sympy.lambdify(symargs, J, 'numpy')
+
+            df[d1] = lambda *_args, _func=func_J, _target_shape=(l, *squeezedims[i]): \
+                _func(*_args).reshape(_target_shape)
         else: 
-            df[d1] = lambda *_args, _symb=J, _target_shape=(l, *squeezedims[i]): \
-                cast(_symb).reshape(_target_shape)
+            df[d1] = lambda *_args, _symb=cast(J), _target_shape=(l, *squeezedims[i]): \
+                _symb.reshape(_target_shape)
         
     return df, d2f
     

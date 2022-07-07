@@ -14,6 +14,9 @@ class cdotdict(dotdict):
             for k, v in self.items()
         })
 
+def kron(a, b): 
+    return np.tensordot(a, b, axes=0).reshape((a.shape[0] * b.shape[0], a.shape[1] * b.shape[1]))
+
 def block_matrix(nested_lists): 
 
     # TODO: use np.blocks instead...

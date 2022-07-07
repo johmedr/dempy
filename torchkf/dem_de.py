@@ -9,6 +9,10 @@ import numpy as np
 import scipy as sp
 import scipy.linalg 
 
+def as_matrix_it(*args):
+    for arg in args: 
+        yield arg.reshape((arg.shape[0], -1))
+
 
 def dem_eval_err_diff(n: int, d: int, M: HierarchicalGaussianModel, qu: dotdict, qp: dotdict): 
         # Get dimensions
@@ -61,7 +65,8 @@ def dem_eval_err_diff(n: int, d: int, M: HierarchicalGaussianModel, qu: dotdict,
         dg  = list()
         d2g = list()
         for i in range(nl - 1): 
-            xvp = tuple(_ if sum(_.shape) > 0 else np.empty(0) for _ in  (x[i], v[i], qp.p[i], qp.u[i], M[i].pE))
+            xvp = (_ if sum(_.shape) > 0 else np.empty(0) for _ in  (x[i], v[i], qp.p[i], qp.u[i], M[i].pE))
+            xvp = tuple(as_matrix_it(*xvp))
 
             if M[i].df_qup is not None:
                 dfi  = M[i].df_qup(*xvp)
