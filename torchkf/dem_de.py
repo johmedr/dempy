@@ -37,13 +37,13 @@ def dem_eval_err_diff(n: int, d: int, M: HierarchicalGaussianModel, qu: dotdict,
 
             p = M[i].pE + qp.u[i] @ qp.p[i]
             try: 
-                res = M[i].f(xi, vi, p)
+                res = M[i]._f(xi, vi, p)
             except: 
                 raise RuntimeError(f"Error while evaluating model[{i}].f!")
             f.append(res)
 
             try: 
-                res = M[i].g(xi, vi, p)
+                res = M[i]._g(xi, vi, p)
             except: 
                 raise RuntimeError(f"Error while evaluating model[{i}].g!")
             g.append(res)
@@ -59,8 +59,17 @@ def dem_eval_err_diff(n: int, d: int, M: HierarchicalGaussianModel, qu: dotdict,
         for i in range(nl - 1): 
             xvp = tuple(_ if sum(_.shape) > 0 else torch.Tensor([]) for _ in  (x[i], v[i], qp.p[i], qp.u[i], M[i].pE))
 
-            dfi, d2fi = compute_df_d2f(lambda x, v, q, u, p: M[i].f(x, v, p + u @ q), xvp, ['dx', 'dv', 'dp', 'du', 'dq'])
-            dgi, d2gi = compute_df_d2f(lambda x, v, q, u, p: M[i].g(x, v, p + u @ q), xvp, ['dx', 'dv', 'dp', 'du', 'dq']) 
+            if M[i].df_qup is not None:
+                dfi  = M[i].df_qup(*xvp)
+                d2fi = M[i].d2f_qup(*xvp) 
+            else: 
+                dfi, d2fi = compute_df_d2f(lambda x, v, q, u, p: M[i].f(x, v, p + u @ q), xvp, ['dx', 'dv', 'dp', 'du', 'dq'])
+
+            if M[i].dg_qup is not None:
+                dgi  = M[i].dg_qup(*xvp)
+                d2gi = M[i].d2g_qup(*xvp) 
+            else: 
+                dgi, d2gi = compute_df_d2f(lambda x, v, q, u, p: M[i].g(x, v, p + u @ q), xvp, ['dx', 'dv', 'dp', 'du', 'dq']) 
 
             dg.append(dgi)
             df.append(dfi)

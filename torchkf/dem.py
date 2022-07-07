@@ -727,11 +727,13 @@ class DEMInversion:
         results.qU = dotdict({k: torch.stack([qU[i][k] for i in range(len(qU))], dim=0) for k in qU[0].keys()})
         results.qE = qE
         
-        torch.set_grad_enabled(True)
 
         return results
 
     def generate(self, nT, u=None): 
+
+        torch.set_grad_enabled(False)
+
         n  = self.n                 # Derivative order
         M  = self.M
         dt = self.M.dt
@@ -761,7 +763,7 @@ class DEMInversion:
 
         xt = X[0]
         vt = V[0]
-        for t in range(0, nT):     
+        for t in tqdm(range(0, nT)):     
             # Unpack state
             zi = [_[t] for _ in Z]
             wi = [_[t] for _ in W] 
@@ -799,14 +801,21 @@ class DEMInversion:
                 p = M[i].pE 
                 
                 # compute functions
-                fi = M[i].f(xi[i][0], vi[i + 1][0], p)
-                gi = M[i].g(xi[i][0], vi[i + 1][0], p)
+                fi = M[i]._f(xi[i][0], vi[i + 1][0], p)
+                gi = M[i]._g(xi[i][0], vi[i + 1][0], p)
                 
                 xv = tuple(_ if sum(_.shape) > 0 else torch.empty(_.shape) for _ in  (xi[i][0], vi[i+1][0]))
                 
                 # compute derivatives
-                dfi, _ = compute_df_d2f(lambda x, v: M[i].f(x, v, M[i].pE), xv, ['dx', 'dv'])
-                dgi, _ = compute_df_d2f(lambda x, v: M[i].g(x, v, M[i].pE), xv, ['dx', 'dv']) 
+                if M[i].df is not None:
+                    dfi = M[i].df(*xv, M[i].pE)
+                else: 
+                    dfi, _ = compute_df_d2f(lambda x, v: M[i].f(x, v, M[i].pE), xv, ['dx', 'dv'])
+
+                if M[i].dg is not None:
+                    dgi = M[i].dg(*xv, M[i].pE)
+                else:
+                    dgi, _ = compute_df_d2f(lambda x, v: M[i].g(x, v, M[i].pE), xv, ['dx', 'dv']) 
 
                 # g(x, v) && f(x, v)
                 vi[i][0] = gi + zi[i][0]

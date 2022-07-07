@@ -3,6 +3,13 @@ import torch
 import sympy
 
 from .dem_structs import *
+import math
+
+import warnings
+import numpy as np
+# necessary for sympy + numpy
+warnings.filterwarnings('ignore', category=FutureWarning)
+warnings.filterwarnings('ignore', category=np.VisibleDeprecationWarning)
 
 
 def compute_df_d2f(func, inputs, input_keys=None) -> Tuple[dotdict, dotdict]:
@@ -75,11 +82,25 @@ def compute_dx(f, dfdx, t, isreg=False):
         return torch.Tensor([[]])
 
     J = torch.Tensor(block_matrix([[np.zeros((1,1)), []], [f * t, dfdx * t]]))
-    dx = torch.linalg.matrix_exp(J)
+    dx = torch.matrix_exp(J)
     return dx[1:, 0, None]
 
 
-def compute_sym_df_d2f(func, *dims, input_keys=None, cast_to=np.ndarray):
+from sympy.utilities.autowrap import autowrap
+import itertools
+
+
+class autowrapnd:     
+    def __init__(self, expr): 
+        self._func = autowrap(expr)
+    
+    def __call__(self, *args): 
+        try: 
+            return self._func(*itertools.chain.from_iterable(_.view(-1) for _ in args))
+        except:
+            return self._func(*itertools.chain.from_iterable(np.array(_).flat for _ in args))
+
+def compute_sym_df_d2f(func, *dims, input_keys=None, wrt=None, cast_to=np.ndarray):
     """ 
     Use symbolic differentiation to compute jacobian and hessian of a function of 3 vectors. 
      - func: if the function to differentiate (must return a vector, ie a tensor (l, ...) where ... are empty or 1's)
@@ -102,44 +123,65 @@ def compute_sym_df_d2f(func, *dims, input_keys=None, cast_to=np.ndarray):
     else: 
         assert(len(dims) == len(input_keys))
     
-    dims = [(dim,) if isinstance(dim, int) else dim for dim in dims]
+    if wrt is None:
+        wrt = input_keys
+    else: 
+        assert(all(_ in input_keys for _ in wrt))
+        
+    wrt = [f'd{k}' for k in wrt]
+    dims = [(dim,1) if isinstance(dim, int) else dim for dim in dims]
     
     # Squeeze column vectors
     squeezedims = [dim if len(dim) == 1 or dim[1] != 1 else (dim[0],) for dim in dims]
     
     # compute flat dimension 
     flatdims = [math.prod(dim) for dim in dims]
-    
-    # create flat variables
-    flatvar = [
-        (f'd{k}', np.array(sympy.symbols(f'{k}0:{n}'))) 
-        for k, n in zip(input_keys, flatdims)
+
+    # create symbolic variables
+    symvars = [
+        (f'd{k}', sympy.MatrixSymbol(k, *dim))
+        for k, dim in zip(input_keys, dims)
     ]
-    
+
+    # wrap the symbols in numpy arrays
     var = [
-        (f'd{k}', np.array(sympy.symbols(f'{k}0:{n}')).reshape(dim))
-        for k, n, dim in zip(input_keys, flatdims, dims)
+        (k, np.array(symvar))
+        for k, symvar in symvars
     ]
     
+    # create flat numpy variables (for differentiation)
+    flatvar = [
+        (k, v.reshape((flatdim,)))
+        for (k, v), flatdim in zip(var, flatdims)
+    ]
+    
+    
+    symargs = [v[1] for v in symvars]
     args = [v[1] for v in var]
 
-    fxvp = sympy.Matrix(func(*args))
+
+    fxvp = sympy.simplify(sympy.Matrix(func(*args)))
     l = fxvp.shape[0]
 
     dfsymb  = dotdict({
-        d: fxvp.jacobian(sym)
+        d: sympy.simplify(fxvp.jacobian(sym))
         for d, sym in flatvar
+        if d in wrt
     })
 
     df  = cdotdict()
     d2f = cdotdict()
 
     for i, (d1, sym1) in enumerate(flatvar):
+        if d1 not in wrt: continue 
+            
         if d1 not in d2f.keys():
             d2f[d1] = cdotdict()
             
         for j, (d2, sym2) in enumerate(flatvar): 
             if j < i: continue
+            if d2 not in wrt: continue 
+                
             if d2 not in d2f.keys(): 
                 d2f[d2] = cdotdict()
 
@@ -147,26 +189,27 @@ def compute_sym_df_d2f(func, *dims, input_keys=None, cast_to=np.ndarray):
             h  = h.reshape(l, sym1.shape[0], sym2.shape[0])
             ht = sympy.permutedims(h, (0, 2, 1))
             
-            h  = sympy.Matrix(h.reshape(l, sym1.shape[0]*sym2.shape[0]))
-            ht = sympy.Matrix(h.reshape(l, sym1.shape[0]*sym2.shape[0]))
+            h  = sympy.simplify(sympy.Matrix(h.reshape(l, sym1.shape[0]*sym2.shape[0])))
+            ht = sympy.simplify(sympy.Matrix(h.reshape(l, sym1.shape[0]*sym2.shape[0])))
             
             if len(h.free_symbols) > 0: 
-                d2f[d1][d2] = lambda *_args, _symb=h, _target_shape=(l, *squeezedims[i], *squeezedims[j]):\
-                    cast(sympy.lambdify(args, _symb, 'numpy')(*_args)).reshape(_target_shape)
-                d2f[d2][d1] = lambda *_args, _symb=ht, _target_shape=(l, *squeezedims[j], *squeezedims[i]):\
-                    cast(sympy.lambdify(args, _symb, 'numpy')(*_args)).reshape(_target_shape)
+
+                d2f[d1][d2] = lambda *_args, _func=autowrap(h, args=symargs), _target_shape=(l, *squeezedims[i], *squeezedims[j]):\
+                    cast(_func(*_args)).reshape(_target_shape)
+                d2f[d2][d1] = lambda *_args, _func=autowrap(ht, args=symargs), _target_shape=(l, *squeezedims[j], *squeezedims[i]):\
+                    cast(_func(*_args)).reshape(_target_shape)
             else:
                 d2f[d1][d2] = lambda *_args, _symb=h, _target_shape=(l, *squeezedims[i], *squeezedims[j]):\
                     cast(_symb).reshape(_target_shape)
                 d2f[d2][d1] = lambda *_args, _symb=ht, _target_shape=(l, *squeezedims[j], *squeezedims[i]):\
                     cast(_symb).reshape(_target_shape)
                 
-        j = dfsymb[d1]
-        if len(j.free_symbols) > 0:
-            df[d1] = lambda *_args, _symb=j, _target_shape=(l, *squeezedims[i]): \
-                cast(sympy.lambdify(args, _symb, 'numpy')(*_args)).reshape(_target_shape)
+        J = dfsymb[d1]
+        if len(J.free_symbols) > 0:
+            df[d1] = lambda *_args, _func=autowrap(J, args=symargs), _target_shape=(l, *squeezedims[i]): \
+                cast(_func(*_args)).reshape(_target_shape)
         else: 
-            df[d1] = lambda *_args, _symb=j, _target_shape=(l, *squeezedims[i]): \
+            df[d1] = lambda *_args, _symb=J, _target_shape=(l, *squeezedims[i]): \
                 cast(_symb).reshape(_target_shape)
         
     return df, d2f

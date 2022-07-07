@@ -3,13 +3,20 @@ import torch
 from .dem_structs import *
 from .dem_dx import compute_sym_df_d2f
 
+import warnings
+
+
+
 class GaussianModel(dotdict): 
     def __init__(self, 
         f=None, g=None, m=None, n=None, l=None, p=None, x=None, v=None, 
         pE=None, pC=None, hE=None, hC=None, gE=None, gC=None, 
         Q=None, R=None, V=None, W=None, xP=None, vP=None, sv=None, sw=None): 
-        self.f  : Callable           = f  # forward function
-        self.g  : Callable           = g  # observation function
+        self.f  : Callable           = f  # forward function (must be numpy compatible) - takes 3 vector arguments, return 1 vector of size n
+        self.g  : Callable           = g  # observation function (must be numpy compatible) - takes 3 vector arguments, return 1 vector of size l
+
+        self._f : Callable           = None # f wrapped to torch - handles shape and type conversion 
+        self._g : Callable           = None # g wrapped to torch - handles shape and type conversion 
 
         self.m  : int                = m  # number of inputs
         self.n  : int                = n  # number of states
@@ -36,15 +43,26 @@ class GaussianModel(dotdict):
         self.sv : torch.Tensor       = sv # smoothness (input noise)
         self.sw : torch.Tensor       = sw # smoothness (state noise)
 
+        self.df      : dotdict       = None
+        self.d2f     : dotdict       = None
+        self.df_qup  : dotdict       = None
+        self.d2f_qup : dotdict       = None
+        self.dg      : dotdict       = None
+        self.d2g     : dotdict       = None
+        self.dg_qup  : dotdict       = None
+        self.d2g_qup : dotdict       = None
+
+        self.num_diff : bool         = False
+
 class HierarchicalGaussianModel(list): 
-    def __init__(self, *models: GaussianModel, dt=None): 
-        models = HierarchicalGaussianModel.prepare_models(*models)
+    def __init__(self, *models: GaussianModel, dt=None, use_numerical_derivatives=False): 
+        self.dt = 1 if dt is None else dt 
+        self._use_numerical_derivatives = use_numerical_derivatives
+
+        models = self.prepare_models(*models)
         super().__init__(models)
 
-        self.dt = 1 if dt is None else dt 
-
-    @staticmethod
-    def prepare_models(*models):
+    def prepare_models(self, *models):
         M = list(models)
 
         # order 
@@ -110,31 +128,36 @@ class HierarchicalGaussianModel(list):
 
         # check functions
         for i in reversed(range(g - 1)):
-            x   = torch.zeros((M[i].n, 1)) if M[i].x is None else M[i].x
+            x      = torch.zeros((M[i].n, 1)) if M[i].x is None else M[i].x
+
             if sum(x.shape) == 0 and M[i].n > 0:
                 x = torch.zeros(M[i].n, 1)
+            
 
             # check function f(x, v, P)
             if not callable(M[i].f): 
                 raise ValueError(f"Not callable function: model[{i}].f!")
+            
             try: 
-                f = M[i].f(x, v, M[i].pE)
+                f = M[i].f(x.numpy(), v.numpy(), M[i].pE.numpy())
             except: 
                 raise ValueError(f"Error while calling function: model[{i}].f")
+
             if f.shape != x.shape:
                 raise ValueError(f"Wrong shape for output of model[{i}].f (expected {x.shape}, got {f.shape}).")
 
             # check function g(x, v, P)
             if not callable(M[i].g): 
                 raise ValueError(f"Not callable function for model[{i}].g!")
+
             if M[i].m is not None and M[i].m != v.shape[0]:
                 warnings.warn(f'Declared input shape of model {i} ({M[i].m}) '
                     f'does not match output shape of model[{i+1}].g ({v.shape[0]})!')
             M[i].m = v.shape[0]
             try: 
-                v      = M[i].g(x, v, M[i].pE)
+                v = torch.from_numpy(M[i].g(x.numpy(), v.numpy(), M[i].pE.numpy()))
             except: 
-                raise ValueError(f"Error while calling function: model[{i}].f")
+                raise ValueError(f"Error while calling function: model[{i}].g")
             if M[i].l is not None and M[i].l != v.shape[0]:
                 warnings.warn(f'Declared output shape of model {i} ({M[i].l}) '
                     f'does not match output of model[{i}].g ({v.shape[0]})!')
@@ -144,6 +167,47 @@ class HierarchicalGaussianModel(list):
 
             M[i].v = v
             M[i].x = x
+
+            # store wrapped function
+            M[i]._f = vfunc((M[i].n, M[i].m, M[i].p), M[i].n)(M[i].f)
+            M[i]._g = vfunc((M[i].n, M[i].m, M[i].p), M[i].l)(M[i].g)
+
+            if not M[i].num_diff and not self._use_numerical_derivatives:
+                # compute f-derivatives in the general case
+                print('Compiling derivatives, it might take some time... ', end='')
+                try:
+                    M[i].df, M[i].d2f = compute_sym_df_d2f(M[i].f, M[i].n, M[i].m, M[i].p, input_keys='xvp', cast_to=torch.tensor)
+                except Exception as e: 
+                    warnings.warn(f'Failed to obtain analytical derivatives for M[{i}].f. Inversion might be slower.\n'
+                        f'Failed with error: {e}\n')
+
+
+                # compute g-derivatives in the general case
+                try:
+                    M[i].dg, M[i].d2g = compute_sym_df_d2f(M[i].g, M[i].n, M[i].m, M[i].p, input_keys='xvp', cast_to=torch.tensor)
+                except Exception as e: 
+                    warnings.warn(f'Failed to obtain analytical derivatives for M[{i}].g. Inversion might be slower.\n'
+                        f'Failed with error: {e}\n')
+
+
+                # compute f-derivatives for the p + u @ q case
+                try:
+                    M[i].df_qup, M[i].d2f_qup = compute_sym_df_d2f(
+                        lambda x, v, q, u, p: M[i].f(x, v, p + u @ q), M[i].n, M[i].m, M[i].p, (M[i].p, M[i].p), M[i].p, 
+                        input_keys='xvpur', wrt='xvp', cast_to=torch.tensor)
+                except Exception as e: 
+                    warnings.warn(f'Failed to obtain analytical derivatives for M[{i}].f (with p + u @ q). Inversion might be slower.\n'
+                        f'Failed with error: {e}\n')
+
+                # compute g-derivatives for the p + u @ q case
+                try:
+                    M[i].dg_qup , M[i].d2g_qup = compute_sym_df_d2f(
+                        lambda x, v, q, u, p: M[i].g(x, v, p + u @ q), M[i].n, M[i].m, M[i].p, (M[i].p, M[i].p), M[i].p, 
+                        input_keys='xvpur', wrt='xvp', cast_to=torch.tensor)
+                except Exception as e: 
+                    warnings.warn(f'Failed to obtain analytical derivatives for M[{i}].g (with p + u @ q). Inversion might be slower.\n'
+                        f'Failed with error: {e}\n')
+                print('Done. ')
 
         # full priors on states
         for i in range(g): 

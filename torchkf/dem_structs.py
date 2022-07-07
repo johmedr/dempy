@@ -78,3 +78,25 @@ class cell(list):
             self[i] = xi
         else: 
             super().__setitem__(index, value)
+
+
+from functools import wraps
+import torch 
+def vfunc(in_sizes, out_size): 
+    """ wraps a function of column vectors that return a column vector
+     handles conversion from torch to numpy
+     shapes is a list of number of rows (int) for each vector 
+    """
+    def _decorator(func):
+        @wraps(func)
+        def _wrapped(*args): 
+            cargs = []
+            for i, (arg, size) in enumerate(zip(args, in_sizes)): 
+                if not isinstance(arg, np.ndarray): 
+                    arg = arg.numpy()
+                cargs.append(arg.reshape((size, 1)))
+
+            ret = func(*cargs)
+            return torch.from_numpy(ret.reshape((out_size, 1)))
+        return _wrapped
+    return _decorator
