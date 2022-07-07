@@ -85,7 +85,7 @@ def compute_dx(f, dfdx, t, isreg=False):
         return np.array([[]])
 
     J = block_matrix([[np.zeros((1,1)), []], [f * t, dfdx * t]])
-    dx = sp.linalg.expm(J)
+    dx = torch.matrix_exp(torch.from_numpy(J)).numpy()
     return dx[1:, 0, None]
 
 

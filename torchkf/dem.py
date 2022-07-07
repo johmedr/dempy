@@ -215,9 +215,9 @@ class DEMInversion:
         for i in range(nl):
             v0.append(np.zeros((M[i].l, M[i].l)))
             w0.append(np.zeros((M[i].n, M[i].n)))
-        V0 = kron(np.zeros((n,n)), sp.linalg.block_diag(*v0))
-        W0 = kron(np.zeros((n,n)), sp.linalg.block_diag(*w0))
-        Qp = sp.linalg.block_diag(V0, W0)
+        V0 = kron(np.zeros((n,n)), block_diag(*v0))
+        W0 = kron(np.zeros((n,n)), block_diag(*w0))
+        Qp = block_diag(V0, W0)
 
         # Qp is: 
         # ((ny*n,    0,    0)
@@ -236,13 +236,13 @@ class DEMInversion:
             for j in range(len(M[i].Q)): 
                 q    = list(*v0)
                 q[i] = M[i].Q[j]
-                Q.append(sp.linalg.block_diag(kron(iVv, sp.linalg.block_diag(*q)), W0))
+                Q.append(block_diag(kron(iVv, block_diag(*q)), W0))
 
             # and fixed components (V) 
             # ------------------------
             q    = list(v0)
             q[i] = M[i].V
-            Qp  += sp.linalg.block_diag(kron(iVv, sp.linalg.block_diag(*q)), W0)
+            Qp  += block_diag(kron(iVv, block_diag(*q)), W0)
 
 
             # noise on hidden states (R)
@@ -250,13 +250,13 @@ class DEMInversion:
             for j in range(len(M[i].R)): 
                 q    = list(*w0)
                 q[i] = M[i].R[j]
-                Q.append(sp.linalg.block_diag(V0, kron(iVw, sp.linalg.block_diag(*q))))
+                Q.append(block_diag(V0, kron(iVw, block_diag(*q))))
 
             # and fixed components (W) 
             # ------------------------
             q    = list(w0)
             q[i] = M[i].W
-            Qp  += sp.linalg.block_diag(V0, kron(iVw, sp.linalg.block_diag(*q)))
+            Qp  += block_diag(V0, kron(iVw, block_diag(*q)))
 
         # number of hyperparameters
         # -------------------------
@@ -264,11 +264,11 @@ class DEMInversion:
 
         # fixed priors on states (u) 
         # --------------------------
-        xP              =   sp.linalg.block_diag(*(M[i].xP for i in range(nl)))
+        xP              =   block_diag(*(M[i].xP for i in range(nl)))
         Px              =   kron(DEMInversion.generalized_covariance(n, 0), xP)
         Pv              =   np.zeros((n*nv,n*nv))
         Pv[:d*nv,:d*nv] =   kron(DEMInversion.generalized_covariance(d, 0), np.zeros((nv, nv)))
-        Pu              =   sp.linalg.block_diag(Px, Pv)
+        Pu              =   block_diag(Px, Pv)
         Pu[:nu,:nu]     =   Pu[:nu,:nu] + np.eye(nu, nu) * nu * np.finfo(np.float32).eps
 
         iqu             =   dotdict()
@@ -278,7 +278,7 @@ class DEMInversion:
         hgE   = list(chain((M[i].hE for i in range(nl)), (M[i].gE for i in range(nl))))
         hgC   = chain((M[i].hC for i in range(nl)), (M[i].gC for i in range(nl)))
         ph.h  = np.concatenate(hgE)           # prior expectation on h
-        ph.c  = sp.linalg.block_diag(*hgC)    # prior covariance on h
+        ph.c  = block_diag(*hgC)    # prior covariance on h
         qh.h  = ph.h                     # conditional expecatation 
         qh.c  = ph.c                     # conditional covariance
         ph.ic = np.linalg.pinv(ph.c)  # prior precision      
@@ -298,7 +298,7 @@ class DEMInversion:
             qp.p.append(np.zeros((M[i].p, 1)))    # initial qp.p 
             pp.c.append(Ui.T @ M[i].pC @ Ui)    # prior covariance
 
-        Up = sp.linalg.block_diag(*qp.u)
+        Up = block_diag(*qp.u)
 
         # initialize and augment with confound parameters B; with flat priors
         # -------------------------------------------------------------------
@@ -308,7 +308,7 @@ class DEMInversion:
         nf    = nP + nn                         # number of free parameters
         ip    = slice(0,nP)
         ib    = slice(nP,nP + nn)
-        pp.c  = sp.linalg.block_diag(*pp.c)
+        pp.c  = block_diag(*pp.c)
         pp.ic = np.linalg.inv(pp.c)
         pp.p  = np.concatenate(qp.p)
 
@@ -350,7 +350,7 @@ class DEMInversion:
         Dy              = kron(np.diag(np.ones((n-1,)), 1), np.eye(ny))
         Dc              = kron(           np.zeros((n, n)), np.eye(nv))
         Dc[:nc*d,:nc*d] = kron(np.diag(np.ones((d-1,)), 1), np.eye(nc))
-        D               = sp.linalg.block_diag(Dx, Dv, Dy, Dc)
+        D               = block_diag(Dx, Dv, Dy, Dc)
 
         # and null blocks
         # ---------------
@@ -757,7 +757,7 @@ class DEMInversion:
         # Derivatives operators
         Dx = kron(np.diag(np.ones((n-1,)), 1), np.eye(nx));
         Dv = kron(np.diag(np.ones((n-1,)), 1), np.eye(nv));
-        D  = sp.linalg.block_diag(Dv, Dx, Dv, Dx)
+        D  = block_diag(Dv, Dx, Dv, Dx)
         dfdw  = kron(np.eye(n),np.eye(nx));
 
         xt = X[0]

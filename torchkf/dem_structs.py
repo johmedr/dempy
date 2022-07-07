@@ -17,6 +17,18 @@ class cdotdict(dotdict):
 def kron(a, b): 
     return (a[:, None, :, None] * b[None, :, None, :]).reshape((a.shape[0] * b.shape[0], a.shape[1] * b.shape[1]))
 
+def block_diag(*arrs): 
+    n   = sum(arr.shape[0] for arr in arrs)
+    m   = sum(arr.shape[1] for arr in arrs)
+    ret = np.zeros((n, m))
+    nx,ny = 0,0
+    for arr in arrs: 
+        ni,nj = arr.shape
+        ret[nx:nx+ni,ny:ny+nj] = arr
+        nx += ni
+        ny += nj
+    return ret
+
 def block_matrix(nested_lists): 
 
     # TODO: use np.blocks instead...
@@ -62,8 +74,8 @@ def block_matrix(nested_lists):
 
         arr.append(np.concatenate(arr_row, axis=1))
 
-
     return np.concatenate(arr, axis=0)
+
 
 class cell(list): 
     def __init__(self, m, n): 

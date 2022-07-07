@@ -87,7 +87,7 @@ def dem_eval_err_diff(n: int, d: int, M: HierarchicalGaussianModel, qu: dotdict,
             d2g.append(d2gi)
 
         # Setup df
-        df = dotdict({k: sp.linalg.block_diag(*(dfi[k] for dfi in df)) for k in ['dx', 'dv', 'dp']}) 
+        df = dotdict({k: block_diag(*(dfi[k] for dfi in df)) for k in ['dx', 'dv', 'dp']}) 
 
         # Setup dgdv manually 
         dgdv = cell(nl, nl-1)
@@ -100,7 +100,7 @@ def dem_eval_err_diff(n: int, d: int, M: HierarchicalGaussianModel, qu: dotdict,
         dgdv = block_matrix(dgdv)
 
         # Setup dg
-        dg = dotdict({k: sp.linalg.block_diag(*(dgi[k] for dgi in dg)) for k in ['dx', 'dp']}) 
+        dg = dotdict({k: block_diag(*(dgi[k] for dgi in dg)) for k in ['dx', 'dp']}) 
         # add an extra row to accomodate the highest hierarchical level
         for k in dg.keys():
             dg[k] = np.concatenate([dg[k], np.zeros((nc, dg[k].shape[1]))], axis=0)
@@ -121,14 +121,14 @@ def dem_eval_err_diff(n: int, d: int, M: HierarchicalGaussianModel, qu: dotdict,
 
 
         if nP > 0:
-            dfdxp = np.stack([sp.linalg.block_diag(*(_[:, ip] for _ in d2f.dp.dx if _.size > 0)) for ip in range(nP)], axis=0)
-            dfdvp = np.stack([sp.linalg.block_diag(*(_[:, ip] for _ in d2f.dp.dv if _.size > 0)) for ip in range(nP)], axis=0)
+            dfdxp = np.stack([block_diag(*(_[:, ip] for _ in d2f.dp.dx if _.size > 0)) for ip in range(nP)], axis=0)
+            dfdvp = np.stack([block_diag(*(_[:, ip] for _ in d2f.dp.dv if _.size > 0)) for ip in range(nP)], axis=0)
 
-            dgdvp = np.stack([sp.linalg.block_diag(*(_[:, ip] for _ in d2g.dp.dv if _.size > 0)) for ip in range(nP)], axis=0)
-            dgdxp = np.stack([sp.linalg.block_diag(*(_[:, ip] for _ in d2g.dp.dx if _.size > 0)) for ip in range(nP)], axis=0)
+            dgdvp = np.stack([block_diag(*(_[:, ip] for _ in d2g.dp.dv if _.size > 0)) for ip in range(nP)], axis=0)
+            dgdxp = np.stack([block_diag(*(_[:, ip] for _ in d2g.dp.dx if _.size > 0)) for ip in range(nP)], axis=0)
 
-            dgdxp = [sp.linalg.block_diag(*(_[:, ip] for _ in d2g.dp.dx if _.size > 0)) for ip in range(nP)]
-            dgdvp = [sp.linalg.block_diag(*(_[:, ip] for _ in d2g.dp.dv if _.size > 0)) for ip in range(nP)]
+            dgdxp = [block_diag(*(_[:, ip] for _ in d2g.dp.dx if _.size > 0)) for ip in range(nP)]
+            dgdvp = [block_diag(*(_[:, ip] for _ in d2g.dp.dv if _.size > 0)) for ip in range(nP)]
 
             # Add a component with nc rows to accomodate the highest hierarchical level
             dgdxp = np.stack([np.concatenate([dgdxpi, np.zeros((nc, dgdxpi.shape[1]))]) for dgdxpi in dgdxp], axis=0)
@@ -145,8 +145,8 @@ def dem_eval_err_diff(n: int, d: int, M: HierarchicalGaussianModel, qu: dotdict,
             dgdvp = np.empty((nP, ne, nv))
 
         if nx > 0: 
-            dfdpx = np.stack([sp.linalg.block_diag(*(_[:, ix] for _ in d2f.dx.dp if _.size > 0)) for ix in range(nx)], axis=0)
-            dgdpx = [sp.linalg.block_diag(*(_[:, ix] for _ in d2g.dx.dp if _.size > 0)) for ix in range(nx)]
+            dfdpx = np.stack([block_diag(*(_[:, ix] for _ in d2f.dx.dp if _.size > 0)) for ix in range(nx)], axis=0)
+            dgdpx = [block_diag(*(_[:, ix] for _ in d2g.dx.dp if _.size > 0)) for ix in range(nx)]
 
             # Add a component with nc rows to accomodate the highest hierarchical level
             dgdpx = np.stack([np.concatenate([dgdpxi, np.zeros((nc, dgdpxi.shape[1]))]) for dgdpxi in dgdpx], axis=0)
@@ -158,8 +158,8 @@ def dem_eval_err_diff(n: int, d: int, M: HierarchicalGaussianModel, qu: dotdict,
             dgdpx = np.empty((nx, ne, nP))
 
         if nv > 0: 
-            dfdpv = np.stack([sp.linalg.block_diag(*(_[:, iv] for _ in d2f.dv.dp if _.size > 0)) for iv in range(nv)], axis=0)
-            dgdpv = [sp.linalg.block_diag(*(_[:, iv] for _ in d2g.dv.dp if _.size > 0)) for iv in range(nv)]
+            dfdpv = np.stack([block_diag(*(_[:, iv] for _ in d2f.dv.dp if _.size > 0)) for iv in range(nv)], axis=0)
+            dgdpv = [block_diag(*(_[:, iv] for _ in d2g.dv.dp if _.size > 0)) for iv in range(nv)]
 
             # Add a component with nc rows to accomodate the highest hierarchical level
             dgdpv = np.stack([np.concatenate([dgdpvi, np.zeros((1, dgdpvi.shape[1]))]) for dgdpvi in dgdpv], axis=0)
