@@ -198,10 +198,8 @@ def compute_sym_df_d2f(func, *dims, input_keys=None, wrt=None, cast_to=np.ndarra
                 d2f[d2][d1] = lambda *_args, _func=func_ht, _target_shape=(l, *squeezedims[j], *squeezedims[i]):\
                     _func(*_args).reshape(_target_shape)
             else:
-                d2f[d1][d2] = lambda *_args, _symb=cast(h), _target_shape=(l, *squeezedims[i], *squeezedims[j]):\
-                    _symb.reshape(_target_shape)
-                d2f[d2][d1] = lambda *_args, _symb=cast(ht), _target_shape=(l, *squeezedims[j], *squeezedims[i]):\
-                    _symb.reshape(_target_shape)
+                d2f[d1][d2] = lambda *_args, _symb=cast(h).reshape((l, *squeezedims[j], *squeezedims[i])): _symb
+                d2f[d2][d1] = lambda *_args, _symb=cast(ht).reshape((l, *squeezedims[j], *squeezedims[i])): _symb
                 
         J = dfsymb[d1]
         if len(J.free_symbols) > 0:
@@ -210,11 +208,9 @@ def compute_sym_df_d2f(func, *dims, input_keys=None, wrt=None, cast_to=np.ndarra
             elif wrap_type == 'lambdify': 
                 func_J  = sympy.lambdify(symargs, J, 'numpy')
 
-            df[d1] = lambda *_args, _func=func_J, _target_shape=(l, *squeezedims[i]): \
-                _func(*_args).reshape(_target_shape)
+            df[d1] = lambda *_args, _func=func_J, _target_shape=(l, *squeezedims[i]): _func(*_args).reshape(_target_shape)
         else: 
-            df[d1] = lambda *_args, _symb=cast(J), _target_shape=(l, *squeezedims[i]): \
-                _symb.reshape(_target_shape)
+            df[d1] = lambda *_args, _symb=cast(J).reshape((l, *squeezedims[i])): _symb
         
     return df, d2f
     
