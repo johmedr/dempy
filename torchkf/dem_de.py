@@ -42,16 +42,19 @@ def dem_eval_err_diff(n: int, d: int, M: HierarchicalGaussianModel, qu: dotdict,
 
             x.append(xi)
             v.append(vi)
+            
+            xi,vi,q,u,p = (_ if sum(_.shape) > 0 else np.empty(0) for _ in  (x[i], v[i], qp.p[i], qp.u[i], M[i].pE))
+            xvp = (xi, vi, p + u @ q)
+            xvp = tuple(as_matrix_it(*xvp))
 
-            p = M[i].pE + qp.u[i] @ qp.p[i]
             try: 
-                res = M[i].f(xi, vi, p)
+                res = M[i].f(*xvp)
             except: 
                 raise RuntimeError(f"Error while evaluating model[{i}].f!")
             f.append(res)
 
             try: 
-                res = M[i].g(xi, vi, p)
+                res = M[i].g(*xvp)
             except: 
                 raise RuntimeError(f"Error while evaluating model[{i}].g!")
             g.append(res)
@@ -65,20 +68,37 @@ def dem_eval_err_diff(n: int, d: int, M: HierarchicalGaussianModel, qu: dotdict,
         dg  = list()
         d2g = list()
         for i in range(nl - 1): 
-            xvp = (_ if sum(_.shape) > 0 else np.empty(0) for _ in  (x[i], v[i], qp.p[i], qp.u[i], M[i].pE))
+            x,v,q,u,p = (_ if sum(_.shape) > 0 else np.empty(0) for _ in  (x[i], v[i], qp.p[i], qp.u[i], M[i].pE))
+            xvp = (x, v, p + u @ q)
             xvp = tuple(as_matrix_it(*xvp))
 
-            if M[i].df_qup is not None:
-                dfi  = M[i].df_qup(*xvp)
-                d2fi = M[i].d2f_qup(*xvp) 
-            else: 
-                dfi, d2fi = compute_df_d2f(lambda x, v, q, u, p: M[i].f(x, v, p + u @ q), xvp, ['dx', 'dv', 'dp', 'du', 'dq'])
 
-            if M[i].dg_qup is not None:
-                dgi  = M[i].dg_qup(*xvp)
-                d2gi = M[i].d2g_qup(*xvp) 
+            if M[i].df is not None:
+                dfi  = M[i].df(*xvp)
+                d2fi = M[i].d2f(*xvp) 
             else: 
-                dgi, d2gi = compute_df_d2f(lambda x, v, q, u, p: M[i].g(x, v, p + u @ q), xvp, ['dx', 'dv', 'dp', 'du', 'dq']) 
+                dfi, d2fi = compute_df_d2f(M[i].f, xvp, ['dx', 'dv', 'dp'])
+
+            if M[i].dg is not None:
+                dgi  = M[i].dg(*xvp)
+                d2gi = M[i].d2g(*xvp) 
+            else: 
+                dgi, d2gi = compute_df_d2f(M[i].g, xvp, ['dx', 'dv', 'dp']) 
+
+            dfi.dp = dfi.dp @ u
+            dgi.dp = dgi.dp @ u
+
+            d2fi.dx.dp = np.einsum('ijk,kl->ijl', d2fi.dx.dp, u)
+            d2fi.dv.dp = np.einsum('ijk,kl->ijl', d2fi.dv.dp, u)
+            d2fi.dp.dx = d2fi.dx.dp.swapaxes(1, 2)
+            d2fi.dp.dv = d2fi.dv.dp.swapaxes(1, 2)
+            d2fi.dp.dp = np.einsum('ik,aij,jl->akl', u, d2fi.dp.dp, u)
+
+            d2gi.dx.dp = np.einsum('ijk,kl->ijl', d2gi.dx.dp, u)
+            d2gi.dv.dp = np.einsum('ijk,kl->ijl', d2gi.dv.dp, u)
+            d2gi.dp.dx = d2gi.dx.dp.swapaxes(1, 2)
+            d2gi.dp.dv = d2gi.dv.dp.swapaxes(1, 2)
+            d2gi.dp.dp = np.einsum('ik,aij,jl->akl', u, d2gi.dp.dp, u)
 
             dg.append(dgi)
             df.append(dfi)

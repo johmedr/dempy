@@ -5,21 +5,25 @@ from .dem_structs import *
 from .dem_dx import compute_sym_df_d2f
 
 import warnings
+from joblib import Parallel, delayed
 
 
 
 class GaussianModel(dotdict): 
     def __init__(self, 
-        f=None, g=None, m=None, n=None, l=None, p=None, x=None, v=None, 
+        f=None, g=None, fsymb=None, gsymb=None, m=None, n=None, l=None, p=None, x=None, v=None, 
         pE=None, pC=None, hE=None, hC=None, gE=None, gC=None, 
         Q=None, R=None, V=None, W=None, xP=None, vP=None, sv=None, sw=None): 
-        self.f  : Callable           = f  # forward function (must be numpy compatible) - takes 3 vector arguments, return 1 vector of size n
-        self.g  : Callable           = g  # observation function (must be numpy compatible) - takes 3 vector arguments, return 1 vector of size l
+        self.f  : Callable         = f  # forward function (must be numpy compatible) - takes 3 vector arguments, return 1 vector of size n
+        self.g  : Callable         = g  # observation function (must be numpy compatible) - takes 3 vector arguments, return 1 vector of size l
 
-        self.m  : int                = m  # number of inputs
-        self.n  : int                = n  # number of states
-        self.l  : int                = l  # number of outputs
-        self.p  : int                = p  # number of parameters
+        self.fsymb: Callable       = fsymb # symbolic declaration of f using sympy
+        self.gsymb: Callable       = gsymb # symbolic declaration of g using sympy
+
+        self.m  : int              = m  # number of inputs
+        self.n  : int              = n  # number of states
+        self.l  : int              = l  # number of outputs
+        self.p  : int              = p  # number of parameters
 
         self.x  : np.ndarray       = x  # explicitly specified states
         self.v  : np.ndarray       = v  # explicitly specified inputs
@@ -41,16 +45,16 @@ class GaussianModel(dotdict):
         self.sv : np.ndarray       = sv # smoothness (input noise)
         self.sw : np.ndarray       = sw # smoothness (state noise)
 
-        self.df      : dotdict       = None
-        self.d2f     : dotdict       = None
-        self.df_qup  : dotdict       = None
-        self.d2f_qup : dotdict       = None
-        self.dg      : dotdict       = None
-        self.d2g     : dotdict       = None
-        self.dg_qup  : dotdict       = None
-        self.d2g_qup : dotdict       = None
+        self.df      : dotdict     = None
+        self.d2f     : dotdict     = None
+        self.df_qup  : dotdict     = None
+        self.d2f_qup : dotdict     = None
+        self.dg      : dotdict     = None
+        self.d2g     : dotdict     = None
+        self.dg_qup  : dotdict     = None
+        self.d2g_qup : dotdict     = None
 
-        self.num_diff : bool         = False
+        self.num_diff : bool       = False
 
 class HierarchicalGaussianModel(list): 
     def __init__(self, *models: GaussianModel, dt=None, use_numerical_derivatives=False): 
@@ -67,7 +71,7 @@ class HierarchicalGaussianModel(list):
         g   = len(M)
 
         # check supra-ordinate level and add one (with flat priors) if necessary
-        if callable(M[-1].g): 
+        if callable(M[-1].g) or callable(M[-1].gsymb): 
             M.append(GaussianModel(l=M[-1].m))
             g = len(M)
         M[-1].n = 0
@@ -80,7 +84,7 @@ class HierarchicalGaussianModel(list):
                 raise ValueError('please specify hidden states or their number')
 
             # default fields for static models (hidden states)
-            if not callable(M[i].f): 
+            if not callable(M[i].f) and not callable(M[i].fsymb): 
                 M[i].f = lambda *x: np.zeros((0,1))
                 M[i].x = np.zeros((0,1))
                 M[i].n = 0
@@ -131,9 +135,15 @@ class HierarchicalGaussianModel(list):
             if prod(x.shape) == 0 and M[i].n > 0:
                 x = np.zeros((M[i].n, 1))
             
+            # check f function
+            if callable(M[i].f) and callable(M[i].fsymb): 
+                raise ValueError(f"Got bot 'f' and 'fsymb' functions for model[{i}]!")
+
+            if callable(M[i].fsymb):
+                M[i].f = compile_symb_func(M[i].fsymb, M[i].n, M[i].m, M[i].p, input_keys='xvp')
 
             # check function f(x, v, P)
-            if not callable(M[i].f): 
+            elif not callable(M[i].f): 
                 raise ValueError(f"Not callable function: model[{i}].f!")
             
             try: 
@@ -143,6 +153,13 @@ class HierarchicalGaussianModel(list):
 
             if f.shape != x.shape:
                 raise ValueError(f"Wrong shape for output of model[{i}].f (expected {x.shape}, got {f.shape}).")
+
+            # check g function
+            if callable(M[i].g) and callable(M[i].gsymb): 
+                raise ValueError(f"Got bot 'g' and 'gsymb' functions for model[{i}]!")
+
+            if callable(M[i].gsymb):
+                M[i].g = compile_symb_func(M[i].gsymb, M[i].n, M[i].m, M[i].p, input_keys='xvp')
 
             # check function g(x, v, P)
             if not callable(M[i].g): 
@@ -167,40 +184,45 @@ class HierarchicalGaussianModel(list):
             M[i].x = x
 
             if not M[i].num_diff and not self._use_numerical_derivatives:
-                # compute f-derivatives in the general case
                 print('Compiling derivatives, it might take some time... ', end='')
+
+                ffunc = M[i].fsymb if M[i].fsymb is not None else M[i].f
                 try:
-                    M[i].df, M[i].d2f = compute_sym_df_d2f(M[i].f, M[i].n, M[i].m, M[i].p, input_keys='xvp')
+                    M[i].df, M[i].d2f = compute_sym_df_d2f(ffunc, M[i].n, M[i].m, M[i].p, input_keys='xvp')
                 except Exception as e: 
                     warnings.warn(f'Failed to obtain analytical derivatives for M[{i}].f. Inversion might be slower.\n'
                         f'Failed with error: {e}\n')
+                print('f() ok ... ', end='')
 
+                # compute f-derivatives for the p + u @ q case
+                # try:
+                #     M[i].df_qup, M[i].d2f_qup = compute_sym_df_d2f(
+                #         lambda x, v, q, u, p: ffunc(x, v, p + u @ q), M[i].n, M[i].m, M[i].p, (M[i].p, M[i].p), M[i].p, 
+                #         input_keys='xvpur', wrt='xvp')
+                # except Exception as e: 
+                #     warnings.warn(f'Failed to obtain analytical derivatives for M[{i}].f (with p + u @ q). Inversion might be slower.\n'
+                #         f'Failed with error: {e}\n')
+                # print('f(p + u @ q) ok ... ', end='')
 
                 # compute g-derivatives in the general case
+                gfunc = M[i].gsymb if M[i].gsymb is not None else M[i].g
                 try:
-                    M[i].dg, M[i].d2g = compute_sym_df_d2f(M[i].g, M[i].n, M[i].m, M[i].p, input_keys='xvp')
+                    M[i].dg, M[i].d2g = compute_sym_df_d2f(gfunc, M[i].n, M[i].m, M[i].p, input_keys='xvp')
                 except Exception as e: 
                     warnings.warn(f'Failed to obtain analytical derivatives for M[{i}].g. Inversion might be slower.\n'
                         f'Failed with error: {e}\n')
-
-
-                # compute f-derivatives for the p + u @ q case
-                try:
-                    M[i].df_qup, M[i].d2f_qup = compute_sym_df_d2f(
-                        lambda x, v, q, u, p: M[i].f(x, v, p + u @ q), M[i].n, M[i].m, M[i].p, (M[i].p, M[i].p), M[i].p, 
-                        input_keys='xvpur', wrt='xvp')
-                except Exception as e: 
-                    warnings.warn(f'Failed to obtain analytical derivatives for M[{i}].f (with p + u @ q). Inversion might be slower.\n'
-                        f'Failed with error: {e}\n')
+                print('g() ok ... ', end='')
 
                 # compute g-derivatives for the p + u @ q case
-                try:
-                    M[i].dg_qup , M[i].d2g_qup = compute_sym_df_d2f(
-                        lambda x, v, q, u, p: M[i].g(x, v, p + u @ q), M[i].n, M[i].m, M[i].p, (M[i].p, M[i].p), M[i].p, 
-                        input_keys='xvpur', wrt='xvp')
-                except Exception as e: 
-                    warnings.warn(f'Failed to obtain analytical derivatives for M[{i}].g (with p + u @ q). Inversion might be slower.\n'
-                        f'Failed with error: {e}\n')
+                # try:
+                #     M[i].dg_qup , M[i].d2g_qup = compute_sym_df_d2f(
+                #         lambda x, v, q, u, p: gfunc(x, v, p + u @ q), M[i].n, M[i].m, M[i].p, (M[i].p, M[i].p), M[i].p, 
+                #         input_keys='xvpur', wrt='xvp')
+                # except Exception as e: 
+                #     warnings.warn(f'Failed to obtain analytical derivatives for M[{i}].g (with p + u @ q). Inversion might be slower.\n'
+                #         f'Failed with error: {e}\n')
+                # print('g(p + u @ q) ok ... ')
+
                 print('Done. ')
 
         # full priors on states

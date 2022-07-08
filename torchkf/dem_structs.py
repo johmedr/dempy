@@ -1,4 +1,5 @@
 import numpy as np
+import sympy
 
 class dotdict(dict):
     """dot.notation access to dictionary attributes"""
@@ -97,24 +98,40 @@ class cell(list):
         else: 
             super().__setitem__(index, value)
 
+def compile_symb_func(func, *dims, input_keys=None):
+    if input_keys is None: 
+        import string
+        input_keys = string.ascii_lowercase[:len(dims)]
+    else: 
+        assert(len(dims) == len(input_keys))
 
-from functools import wraps
-import torch 
-def vfunc(in_sizes, out_size): 
-    """ wraps a function of column vectors that return a column vector
-     handles conversion from torch to numpy
-     shapes is a list of number of rows (int) for each vector 
-    """
-    def _decorator(func):
-        @wraps(func)
-        def _wrapped(*args): 
-            cargs = []
-            for i, (arg, size) in enumerate(zip(args, in_sizes)): 
-                if not isinstance(arg, np.ndarray): 
-                    arg = arg.numpy()
-                cargs.append(arg.reshape((size, 1)))
+    dims = [(dim,1) if isinstance(dim, int) else dim for dim in dims]
+    symvars = [
+        sympy.MatrixSymbol(k, *dim) 
+        for k, dim in zip(input_keys, dims)
+    ]
+    symret = func(*symvars)
 
-            ret = func(*cargs)
-            return torch.from_numpy(ret.reshape((out_size, 1)))
-        return _wrapped
-    return _decorator
+    return sympy.lambdify(symvars, symret, 'numpy', cse=True)
+
+
+# from functools import wraps
+# import torch 
+# def vfunc(in_sizes, out_size): 
+#     """ wraps a function of column vectors that return a column vector
+#      handles conversion from torch to numpy
+#      shapes is a list of number of rows (int) for each vector 
+#     """
+#     def _decorator(func):
+#         @wraps(func)
+#         def _wrapped(*args): 
+#             cargs = []
+#             for i, (arg, size) in enumerate(zip(args, in_sizes)): 
+#                 if not isinstance(arg, np.ndarray): 
+#                     arg = arg.numpy()
+#                 cargs.append(arg.reshape((size, 1)))
+
+#             ret = func(*cargs)
+#             return torch.from_numpy(ret.reshape((out_size, 1)))
+#         return _wrapped
+#     return _decorator

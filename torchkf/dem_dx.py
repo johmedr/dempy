@@ -198,7 +198,7 @@ def compute_sym_df_d2f(func, *dims, input_keys=None, wrt=None, cast_to=np.ndarra
                 d2f[d2][d1] = lambda *_args, _func=func_ht, _target_shape=(l, *squeezedims[j], *squeezedims[i]):\
                     _func(*_args).reshape(_target_shape)
             else:
-                d2f[d1][d2] = lambda *_args, _symb=cast(h).reshape((l, *squeezedims[j], *squeezedims[i])): _symb
+                d2f[d1][d2] = lambda *_args, _symb=cast(h).reshape((l, *squeezedims[i], *squeezedims[j])): _symb
                 d2f[d2][d1] = lambda *_args, _symb=cast(ht).reshape((l, *squeezedims[j], *squeezedims[i])): _symb
                 
         J = dfsymb[d1]

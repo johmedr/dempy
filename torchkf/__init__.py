@@ -6,6 +6,6 @@ from .hierarchical_dynamical_model import GaussianSystem, HierarchicalDynamicalM
 
 from .dem           import DEMInversion
 from .dem_hgm       import GaussianModel, HierarchicalGaussianModel
-from .dem_dx        import compute_dx, compute_df_d2f
+from .dem_dx        import compute_dx, compute_df_d2f, compute_sym_df_d2f
 from .dem_structs   import dotdict, cdotdict, block_matrix, cell
 from .dem_z         import dem_z 
