@@ -130,10 +130,12 @@ class DEMInversion:
             x   : Optional[np.ndarray] = None,    # Confounds
             nD  : int = 1,                          # Number of D-steps 
             nE  : int = 8,                          # Number of E-steps
-            nM  : int = 8,                          # Number of M-steps
+            nM  : int = 8,                          # Number of M-steps 
             K   : int = 1,                          # Learning rate
             tol : float = np.exp(-4),               # Numerical tolerance
-            td  : Optional[float] = None            # Integration time 
+            td  : Optional[float] = None,           # Integration time 
+            Emin: int = 0, 
+            Mmin: int = 0, 
             ):
         log = self.logger
 
@@ -170,6 +172,8 @@ class DEMInversion:
         B   : dotdict            = dotdict()            # saved states
         F   : np.ndarray       = np.zeros(nE)      # Free-energy
         A   : np.ndarray       = np.zeros(nE)      # Free-action
+        F[:] = np.nan
+        A[:] = np.nan
 
         # prior moments
         # -------------
@@ -234,7 +238,7 @@ class DEMInversion:
             # noise on causal states (Q)
             # --------------------------
             for j in range(len(M[i].Q)): 
-                q    = list(*v0)
+                q    = list(v0)
                 q[i] = M[i].Q[j]
                 Q.append(block_diag(kron(iVv, block_diag(*q)), W0))
 
@@ -248,7 +252,7 @@ class DEMInversion:
             # noise on hidden states (R)
             # --------------------------
             for j in range(len(M[i].R)): 
-                q    = list(*w0)
+                q    = list(w0)
                 q[i] = M[i].R[j]
                 Q.append(block_diag(V0, kron(iVw, block_diag(*q))))
 
@@ -278,10 +282,10 @@ class DEMInversion:
         hgE   = list(chain((M[i].hE for i in range(nl)), (M[i].gE for i in range(nl))))
         hgC   = chain((M[i].hC for i in range(nl)), (M[i].gC for i in range(nl)))
         ph.h  = np.concatenate(hgE)           # prior expectation on h
-        ph.c  = block_diag(*hgC)    # prior covariance on h
-        qh.h  = ph.h                     # conditional expecatation 
-        qh.c  = ph.c                     # conditional covariance
-        ph.ic = np.linalg.pinv(ph.c)  # prior precision      
+        ph.c  = block_diag(*hgC)                # prior covariance on h
+        qh.h  = ph.h.copy()                     # conditional expecatation 
+        qh.c  = ph.c.copy()                     # conditional covariance
+        ph.ic = np.linalg.pinv(ph.c)            # prior precision      
 
         # priors on parameters (in reduced parameter space)
         # =================================================
@@ -291,7 +295,8 @@ class DEMInversion:
         for i in range(nl - 1): 
             # eigenvector reduction: p <- pE + qp.u * qp.p 
             # --------------------------------------------
-            Ui      = np.linalg.svd(M[i].pC, full_matrices=False)[0]
+            Ui, si, Vhi  = np.linalg.svd(M[i].pC, full_matrices=False, hermitian=True)
+            Ui      = Ui[:, si != 0]
             M[i].p  = Ui.shape[1]               # number of qp.p
 
             qp.u.append(Ui)                     # basis for parameters (U from SVD's USV')
@@ -373,7 +378,7 @@ class DEMInversion:
 
         # prepare progress bars 
         # ---------------------
-        if nE > 1: Ebar = tqdm(desc='  E-step', total=nE)
+        if nE > 1: Ebar = tqdm(desc=f'E-step (F = {-np.inf:.4e})', total=nE)
         if nM > 1: Mbar = tqdm(desc='  M-step', total=nM)
         Tbar = tqdm(desc='timestep', total=nT)
 
@@ -411,7 +416,7 @@ class DEMInversion:
             # [re-]adjust for confounds
             # -------------------------
             if nb > 0: 
-                y     = y - qp.b * x
+                y     = y - qp.b * x # @ ? 
 
             # [re-]set states & their derivatives
             # -----------------------------------
@@ -559,19 +564,20 @@ class DEMInversion:
                 dS    = ECE + EE - S * nT 
 
                 # 1st order derivatives 
+                dPdh = [None] * nh
                 for i in range(nh): 
                     dPdh[i] = Q[i] * np.exp(qh.h[i])
-                    dFdh[i] = - np.trace(dPdh[i] * dS) / 2
+                    dFdh[i] = - np.trace(dPdh[i] @ dS) / 2
 
                 # 2nd order derivatives 
                 for i in range(nh): 
                     for j in range(nh): 
-                        dFdhh[i, j] = - np.trace(dPdh[i] * S * dPdh[j] * S * nT)/ 2
+                        dFdhh[i, j] = - np.trace(dPdh[i] @ S @ dPdh[j] @ S * nT)/ 2
 
                 # hyperpriors
                 qh.e        = qh.h - ph.h
                 if nh > 0:
-                    dFdh[:, :]  = dFdh - ph.ic * qh.e
+                    dFdh[:, :]  = dFdh - ph.ic @ qh.e
                     dFdhh[:,:]  = dFdhh - ph.ic
 
                     # update ReML extimate of parameters
@@ -585,7 +591,7 @@ class DEMInversion:
                 qh.c = np.linalg.inv(dFdhh)
 
                 # convergence (M-step)
-                if nh > 0 and (((dFdh.T @ dh).squeeze() < tol) or np.linalg.norm(dh, 1) < tol): 
+                if nh > 0 and (((dFdh.T @ dh).squeeze() < tol) or np.linalg.norm(dh, 1) < tol) and iM > Mmin: 
                     break
 
                 if nM > 1: 
@@ -667,7 +673,7 @@ class DEMInversion:
                 # update conditional expectation
                 # ------------------------------
                 dp      = compute_dx(dFdp, dFdpp, te, isreg=True) 
-                qp.e    = qp.e + dp[ip]
+                qp.e   += dp[ip]
                 qp.p    = list()
                 npi     = 0
                 for i in range(nl - 1): 
@@ -691,12 +697,15 @@ class DEMInversion:
             F[iE]  = Fi;
             A[iE]  = Ai;
 
+            log.info(f'dp: {dp}')
+            log.info(f'mh: {mh}')
 
             log.info(f'Li: {Li}')
             log.info(f'Ai: {Ai}')
 
             # Check convergence 
-            if np.linalg.norm(dp.reshape((-1,)), 1) <= tol * np.linalg.norm(np.concatenate(qp.p).reshape((-1,)), 1) and np.linalg.norm(mh.reshape((-1,)), 1) <= tol: 
+            if (np.linalg.norm(dp.reshape((-1,)), 1) <= tol * np.linalg.norm(np.concatenate(qp.p).reshape((-1,)), 1)\
+                 and np.linalg.norm(mh.reshape((-1,)), 1) <= tol) and iE > Emin: 
                 break 
             if te < -8: 
                 break
@@ -704,6 +713,7 @@ class DEMInversion:
             # update progress bar
             # -------------------
             if nE > 1:
+                Ebar.set_description(f'E-step (F = {Fi:.4e})')
                 Ebar.update()
                 Ebar.refresh()
 

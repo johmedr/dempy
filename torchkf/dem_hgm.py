@@ -266,8 +266,8 @@ class HierarchicalGaussianModel(list):
             M[i].W = np.empty(0) if M[i].W is None else M[i].W
 
             # check hyperpriors (expectation)
-            M[i].hE = np.zeros((len(M[i].Q), 1)) if M[i].hE is None or prod(M[i].hE.shape) == 0 else M[i].hE
-            M[i].gE = np.zeros((len(M[i].R), 1)) if M[i].gE is None or prod(M[i].gE.shape) == 0 else M[i].gE
+            M[i].hE = np.zeros((len(M[i].Q), 1)) if M[i].hE is None else np.array(M[i].hE).reshape((-1,1))
+            M[i].gE = np.zeros((len(M[i].R), 1)) if M[i].gE is None else np.array(M[i].gE).reshape((-1,1))
 
             #  check hyperpriors (covariances)
             try:
@@ -280,27 +280,27 @@ class HierarchicalGaussianModel(list):
                 M[i].gC * M[i].gE
             except: 
                 M[i].gC = np.eye(len(M[i].gE)) / pP 
-
+ 
             # check Q and R (precision components)
 
             # check components and assume iid if not specified
-            if len(M[i].Q) > len(M[i].hE): 
-                M[i].hE = np.zeros((len(M[i].Q), 1)) + M[i].hE[1]
-            elif len(M[i].Q) < len(M[i].hE): 
+            if len(M[i].Q) > (M[i].hE.size): 
+                M[i].hE = np.zeros((len(M[i].Q), 1)) + M[i].hE[0]
+            elif len(M[i].Q) < (M[i].hE.size): 
                 M[i].Q  = [np.eye(M[i].l)]
-                M[i].hE = M[i].hE[1]
+                M[i].hE = M[i].hE[0].reshape((1,1))
 
-            if len(M[i].hE) > len(M[i].hC): 
-                M[i].hC = np.eye(len(M[i].Q)) * M[i].hC[1]
+            if (M[i].hE.size) > (M[i].hC.size): 
+                M[i].hC = np.eye(len(M[i].Q)) * M[i].hC[0]
             
-            if len(M[i].R) > len(M[i].gE): 
-                M[i].gE = np.zeros((len(M[i].R), 1))
-            elif len(M[i].R) < len(M[i].gE): 
+            if len(M[i].R) > (M[i].gE.size): 
+                M[i].gE = np.zeros((len(M[i].R), 1)) + M[i].gE[0]
+            elif len(M[i].R) < (M[i].gE.size): 
                 M[i].R = [np.eye(M[i].n)]
-                M[i].gE = M[i].gE[1]
+                M[i].gE = M[i].gE[0].reshape((1,1))
             
-            if len(M[i].gE) > len(M[i].gC): 
-                M[i].gC = np.eye(len(M[i].R)) * M[i].gC[1]
+            if (M[i].gE.size) > (M[i].gC.size): 
+                M[i].gC = np.eye(len(M[i].R)) * M[i].gC[0]
 
             # check consistency and sizes (Q)
             # -------------------------------
