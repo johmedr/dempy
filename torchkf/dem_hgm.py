@@ -57,10 +57,10 @@ class GaussianModel(dotdict):
         self.num_diff : bool       = False
 
 class HierarchicalGaussianModel(list): 
-    def __init__(self, *models: GaussianModel, dt=None, use_numerical_derivatives=False): 
+    def __init__(self, *models: GaussianModel, dt=None, use_numerical_derivatives=False, n_jobs=1): 
         self.dt = 1 if dt is None else dt 
         self._use_numerical_derivatives = use_numerical_derivatives
-
+        self._n_jobs = n_jobs
         models = self.prepare_models(*models)
         super().__init__(models)
 

@@ -9,6 +9,8 @@ import math
 
 import warnings
 import numpy as np
+import joblib
+
 # necessary for sympy + numpy
 warnings.filterwarnings('ignore', category=FutureWarning)
 warnings.filterwarnings('ignore', category=np.VisibleDeprecationWarning)
@@ -90,7 +92,6 @@ def compute_dx(f, dfdx, t, isreg=False):
 
 
 from sympy.utilities.autowrap import autowrap
-import itertools
 
 
 def compute_sym_df_d2f(func, *dims, input_keys=None, wrt=None, cast_to=np.ndarray, wrap_type='lambdify'):
@@ -190,8 +191,8 @@ def compute_sym_df_d2f(func, *dims, input_keys=None, wrt=None, cast_to=np.ndarra
                     func_h  = autowrap(h, args=symargs)
                     func_ht = autowrap(ht, args=symargs)
                 elif wrap_type == 'lambdify': 
-                    func_h  = sympy.lambdify(symargs, h, 'numpy')
-                    func_ht = sympy.lambdify(symargs, ht, 'numpy')
+                    func_h  = sympy.lambdify(symargs, h, 'numpy', cse=True)
+                    func_ht = sympy.lambdify(symargs, ht, 'numpy', cse=True)
 
                 d2f[d1][d2] = lambda *_args, _func=func_h, _target_shape=(l, *squeezedims[i], *squeezedims[j]):\
                     _func(*_args).reshape(_target_shape)
@@ -206,7 +207,7 @@ def compute_sym_df_d2f(func, *dims, input_keys=None, wrt=None, cast_to=np.ndarra
             if wrap_type == 'autowrap':
                 func_J  = autowrap(J, args=symargs)
             elif wrap_type == 'lambdify': 
-                func_J  = sympy.lambdify(symargs, J, 'numpy')
+                func_J  = sympy.lambdify(symargs, J, 'numpy', cse=True)
 
             df[d1] = lambda *_args, _func=func_J, _target_shape=(l, *squeezedims[i]): _func(*_args).reshape(_target_shape)
         else: 
