@@ -184,44 +184,36 @@ class HierarchicalGaussianModel(list):
             M[i].x = x
 
             if not M[i].num_diff and not self._use_numerical_derivatives:
-                print('Compiling derivatives, it might take some time... ', end='')
+                print('Checking derivatives, it might take some time... ', end='')
 
-                ffunc = M[i].fsymb if M[i].fsymb is not None else M[i].f
-                try:
-                    M[i].df, M[i].d2f = compute_sym_df_d2f(ffunc, M[i].n, M[i].m, M[i].p, input_keys='xvp')
-                except Exception as e: 
-                    warnings.warn(f'Failed to obtain analytical derivatives for M[{i}].f. Inversion might be slower.\n'
-                        f'Failed with error: {e}\n')
+                if M[i].df is None and M[i].d2f is None: 
+                    ffunc = M[i].fsymb if M[i].fsymb is not None else M[i].f
+                    try:
+                        M[i].df, M[i].d2f = compute_sym_df_d2f(ffunc, M[i].n, M[i].m, M[i].p, input_keys='xvp')
+                    except Exception as e: 
+                        warnings.warn(f'Failed to obtain analytical derivatives for M[{i}].f. Inversion might be slower.\n'
+                            f'Failed with error: {e}\n')
+                elif M[i].df is not None and M[i].d2f is not None:
+                    pass
+                    # ... todo: check and stuff
+                else: raise ValueError('Either both of (or none of) df, d2f must be provided')
+
                 print('f() ok ... ', end='')
 
-                # compute f-derivatives for the p + u @ q case
-                # try:
-                #     M[i].df_qup, M[i].d2f_qup = compute_sym_df_d2f(
-                #         lambda x, v, q, u, p: ffunc(x, v, p + u @ q), M[i].n, M[i].m, M[i].p, (M[i].p, M[i].p), M[i].p, 
-                #         input_keys='xvpur', wrt='xvp')
-                # except Exception as e: 
-                #     warnings.warn(f'Failed to obtain analytical derivatives for M[{i}].f (with p + u @ q). Inversion might be slower.\n'
-                #         f'Failed with error: {e}\n')
-                # print('f(p + u @ q) ok ... ', end='')
-
                 # compute g-derivatives in the general case
-                gfunc = M[i].gsymb if M[i].gsymb is not None else M[i].g
-                try:
-                    M[i].dg, M[i].d2g = compute_sym_df_d2f(gfunc, M[i].n, M[i].m, M[i].p, input_keys='xvp')
-                except Exception as e: 
-                    warnings.warn(f'Failed to obtain analytical derivatives for M[{i}].g. Inversion might be slower.\n'
-                        f'Failed with error: {e}\n')
+                if M[i].dg is None and M[i].d2g is None: 
+                    gfunc = M[i].gsymb if M[i].gsymb is not None else M[i].g
+                    try:
+                        M[i].dg, M[i].d2g = compute_sym_df_d2f(gfunc, M[i].n, M[i].m, M[i].p, input_keys='xvp')
+                    except Exception as e: 
+                        warnings.warn(f'Failed to obtain analytical derivatives for M[{i}].g. Inversion might be slower.\n'
+                            f'Failed with error: {e}\n')
+                elif M[i].dg is not None and M[i].d2g is not None:
+                    pass
+                    # ... todo: check and stuff
+                else: raise ValueError('Either both of (or none of) dg, d2g must be provided')
+                
                 print('g() ok ... ', end='')
-
-                # compute g-derivatives for the p + u @ q case
-                # try:
-                #     M[i].dg_qup , M[i].d2g_qup = compute_sym_df_d2f(
-                #         lambda x, v, q, u, p: gfunc(x, v, p + u @ q), M[i].n, M[i].m, M[i].p, (M[i].p, M[i].p), M[i].p, 
-                #         input_keys='xvpur', wrt='xvp')
-                # except Exception as e: 
-                #     warnings.warn(f'Failed to obtain analytical derivatives for M[{i}].g (with p + u @ q). Inversion might be slower.\n'
-                #         f'Failed with error: {e}\n')
-                # print('g(p + u @ q) ok ... ')
 
                 print('Done. ')
 
