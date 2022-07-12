@@ -184,9 +184,10 @@ class HierarchicalGaussianModel(list):
             M[i].x = x
 
             if not M[i].num_diff and not self._use_numerical_derivatives:
-                print('Checking derivatives, it might take some time... ', end='')
+                print('Compiling derivatives, it might take some time... ')
 
                 if M[i].df is None and M[i].d2f is None: 
+                    print('  Compiling f... ', end='')
                     ffunc = M[i].fsymb if M[i].fsymb is not None else M[i].f
                     try:
                         M[i].df, M[i].d2f = compute_sym_df_d2f(ffunc, M[i].n, M[i].m, M[i].p, input_keys='xvp')
@@ -198,10 +199,11 @@ class HierarchicalGaussianModel(list):
                     # ... todo: check and stuff
                 else: raise ValueError('Either both of (or none of) df, d2f must be provided')
 
-                print('f() ok ... ', end='')
+                print('f() ok.')
 
                 # compute g-derivatives in the general case
                 if M[i].dg is None and M[i].d2g is None: 
+                    print('  Compiling g... ', end='')
                     gfunc = M[i].gsymb if M[i].gsymb is not None else M[i].g
                     try:
                         M[i].dg, M[i].d2g = compute_sym_df_d2f(gfunc, M[i].n, M[i].m, M[i].p, input_keys='xvp')
@@ -213,7 +215,7 @@ class HierarchicalGaussianModel(list):
                     # ... todo: check and stuff
                 else: raise ValueError('Either both of (or none of) dg, d2g must be provided')
                 
-                print('g() ok ... ', end='')
+                print('g() ok. ')
 
                 print('Done. ')
 
