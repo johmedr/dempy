@@ -1,6 +1,14 @@
 import numpy as np
 import sympy
 
+try:
+    from math import prod
+except ImportError: 
+    from functools import reduce
+    import operator
+    def prod(iterable):
+        return reduce(operator.mul, iterable, 1)
+
 class dotdict(dict):
     """dot.notation access to dictionary attributes"""
     __getattr__ = dict.__getitem__
@@ -10,10 +18,11 @@ class dotdict(dict):
 class cdotdict(dotdict):
     """callable dot dict""" 
     def __call__(self, *args, **kwargs):
-        return dotdict({
-            k: v(*args, **kwargs) if callable(v) else v
-            for k, v in self.items()
-        })
+        return dotdict(
+            zip(self.keys(),
+                map(lambda v: 
+                    v(*args, **kwargs) if callable(v) else v, 
+                    self.values())))
 
 def kron(a, b): 
     return (a[:, None, :, None] * b[None, :, None, :]).reshape((a.shape[0] * b.shape[0], a.shape[1] * b.shape[1]))

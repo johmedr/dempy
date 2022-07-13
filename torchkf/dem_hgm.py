@@ -193,7 +193,7 @@ class HierarchicalGaussianModel(list):
                     try:
                         start_time = time.time()
                         M[i].df, M[i].d2f = compute_sym_df_d2f(ffunc, M[i].n, M[i].m, M[i].p, input_keys='xvp')
-                        print(f'f() ok. (compiled in {(time.time() - start_time)}s)')
+                        print(f'f() ok. (compiled in {(time.time() - start_time):.2f}s)')
 
                     except Exception as e: 
                         warnings.warn(f'Failed to obtain analytical derivatives for M[{i}].f. Inversion might be slower.\n'
@@ -211,7 +211,7 @@ class HierarchicalGaussianModel(list):
                     try:
                         start_time = time.time()
                         M[i].dg, M[i].d2g = compute_sym_df_d2f(gfunc, M[i].n, M[i].m, M[i].p, input_keys='xvp')
-                        print(f'g() ok. (compiled in {(time.time() - start_time)}s)')
+                        print(f'g() ok. (compiled in {(time.time() - start_time):.2f}s)')
 
                     except Exception as e: 
                         warnings.warn(f'Failed to obtain analytical derivatives for M[{i}].g. Inversion might be slower.\n'
