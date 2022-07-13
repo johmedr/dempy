@@ -1,5 +1,7 @@
 import numpy as np
 import sympy
+import math
+
 
 try:
     from math import prod
@@ -107,21 +109,6 @@ class cell(list):
         else: 
             super().__setitem__(index, value)
 
-def compile_symb_func(func, *dims, input_keys=None):
-    if input_keys is None: 
-        import string
-        input_keys = string.ascii_lowercase[:len(dims)]
-    else: 
-        assert(len(dims) == len(input_keys))
-
-    dims = [(dim,1) if isinstance(dim, int) else dim for dim in dims]
-    symvars = [
-        sympy.MatrixSymbol(k, *dim) 
-        for k, dim in zip(input_keys, dims)
-    ]
-    symret = func(*symvars)
-
-    return sympy.lambdify(symvars, symret, 'numpy', cse=True)
 
 
 # from functools import wraps

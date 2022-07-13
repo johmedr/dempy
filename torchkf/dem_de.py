@@ -144,8 +144,8 @@ def dem_eval_err_diff(n: int, d: int, M: HierarchicalGaussianModel, qu: dotdict,
             dfdxp = np.stack([block_diag(*(_[:, ip] for _ in d2f.dp.dx if _.size > 0)) for ip in range(nP)], axis=0)
             dfdvp = np.stack([block_diag(*(_[:, ip] for _ in d2f.dp.dv if _.size > 0)) for ip in range(nP)], axis=0)
 
-            dgdvp = np.stack([block_diag(*(_[:, ip] for _ in d2g.dp.dv if _.size > 0)) for ip in range(nP)], axis=0)
-            dgdxp = np.stack([block_diag(*(_[:, ip] for _ in d2g.dp.dx if _.size > 0)) for ip in range(nP)], axis=0)
+            # dgdvp = np.stack([block_diag(*(_[:, ip] for _ in d2g.dp.dv if _.size > 0)) for ip in range(nP)], axis=0)
+            # dgdxp = np.stack([block_diag(*(_[:, ip] for _ in d2g.dp.dx if _.size > 0)) for ip in range(nP)], axis=0)
 
             dgdxp = [block_diag(*(_[:, ip] for _ in d2g.dp.dx if _.size > 0)) for ip in range(nP)]
             dgdvp = [block_diag(*(_[:, ip] for _ in d2g.dp.dv if _.size > 0)) for ip in range(nP)]
@@ -182,7 +182,7 @@ def dem_eval_err_diff(n: int, d: int, M: HierarchicalGaussianModel, qu: dotdict,
             dgdpv = [block_diag(*(_[:, iv] for _ in d2g.dv.dp if _.size > 0)) for iv in range(nv)]
 
             # Add a component with nc rows to accomodate the highest hierarchical level
-            dgdpv = np.stack([np.concatenate([dgdpvi, np.zeros((1, dgdpvi.shape[1]))]) for dgdpvi in dgdpv], axis=0)
+            dgdpv = np.stack([np.concatenate([dgdpvi, np.zeros((nc, dgdpvi.shape[1]))]) for dgdpvi in dgdpv], axis=0)
 
             dfdpv = dfdpv.reshape((nv, nx, nP))
             dgdpv = dgdpv.reshape((nv, ne, nP))

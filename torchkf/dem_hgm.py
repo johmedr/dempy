@@ -2,7 +2,7 @@ import numpy as np
 from math import prod
 
 from .dem_structs import *
-from .dem_dx import compute_sym_df_d2f
+from .dem_dx import compute_sym_df_d2f, compile_symb_func
 
 import warnings
 
@@ -197,7 +197,9 @@ class HierarchicalGaussianModel(list):
 
                     except Exception as e: 
                         warnings.warn(f'Failed to obtain analytical derivatives for M[{i}].f. Inversion might be slower.\n'
-                            f'Failed with error: {e}\n')
+                            f'Failed with error: \n')
+                        raise e
+
                 elif M[i].df is not None and M[i].d2f is not None:
                     pass
                     # ... todo: check and stuff
@@ -215,7 +217,9 @@ class HierarchicalGaussianModel(list):
 
                     except Exception as e: 
                         warnings.warn(f'Failed to obtain analytical derivatives for M[{i}].g. Inversion might be slower.\n'
-                            f'Failed with error: {e}\n')
+                            f'Failed with error: \n')
+                        raise e
+
                 elif M[i].dg is not None and M[i].d2g is not None:
                     pass
                     # ... todo: check and stuff

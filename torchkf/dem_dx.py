@@ -91,14 +91,58 @@ def compute_dx(f, dfdx, t, isreg=False):
     return dx[1:, 0, None]
 
 
+
+
+
 from sympy.utilities.autowrap import autowrap
 import functools
 
-from itertools import chain, starmap, product
+from itertools import chain, starmap, product, combinations_with_replacement
 import math
 from tqdm.autonotebook import tqdm
 
 import ray
+
+
+@functools.lru_cache
+def compile_symb_func(func, *dims, input_keys=None):
+    if input_keys is None: 
+        import string
+        input_keys = string.ascii_lowercase[:len(dims)]
+    else: 
+        assert(len(dims) == len(input_keys))
+
+    dims = [(dim,1) if isinstance(dim, int) else dim for dim in dims]
+    flatdims = [math.prod(dim) for dim in dims]
+
+    # create symbolic variables
+    symvars = [
+        (f'd{k}', sympy.symarray(k, dim))
+        for k, dim in zip(input_keys, flatdims)
+    ]
+    
+    # create symbolic matrix symb
+    symmat = [
+        (f'd{k}', sympy.MatrixSymbol(k, dim, 1))
+        for k, dim in zip(input_keys, flatdims)
+    ]
+
+    # symbols in column numpy arrays
+    var = [
+        (k, symvar.reshape((-1, 1)))
+        for k, symvar in symvars
+    ]    
+    
+    symargs = [v[1] for v in symmat]
+    args = [v[1] for v in var]
+    _vars = [v[1] for v in symvars]
+    
+    replace_dict = dict(chain(*starmap(zip, zip(_vars, symargs))))
+    
+    symret = sympy.Matrix(func(*args))
+    
+    return sympy.lambdify(symargs, symret.xreplace(replace_dict), cse=True)
+
 
 @functools.lru_cache
 def compute_sym_df_d2f(func, *dims, input_keys=None, wrt=None):
@@ -188,12 +232,29 @@ def compute_sym_df_d2f(func, *dims, input_keys=None, wrt=None):
                 d2f[d2] = cdotdict()
 
 
-            ret = np.asarray([*starmap(lambda x, v: 
-                    ray.remote(sympy.diff).remote(x,v) if x.free_symbols else x, 
-                    product(dfsymb[d1], sym2))])
+            if i ==  j:
+                compute  = [*map(lambda idxs: idxs[1] <= idxs[2], 
+                    product(range(l), range(sym1.shape[0]), range(sym2.shape[0])))]
+                infer_to = [*map(lambda idxs: idxs[1] > idxs[2], 
+                    product(range(l), range(sym1.shape[0]), range(sym2.shape[0])))]
+                infer_from = [*map(lambda idxs: idxs[1] < idxs[2], 
+                    product(range(l), range(sym1.shape[0]), range(sym2.shape[0])))]
+
+                ret = np.asarray([*starmap(lambda ok, xv: 
+                        ray.remote(sympy.diff).remote(*xv) if xv[0].free_symbols and ok else xv[0], 
+                        zip(compute, product(dfsymb[d1], sym2)))])
+                future = [*map(lambda e: isinstance(e, ray.ObjectRef), ret)]
+                ret[future] = ray.get(ret[future].tolist())
+
+                ret[infer_to] = ret[infer_from]
+
+            else: 
+                ret = np.asarray([*starmap(lambda x, v: 
+                        ray.remote(sympy.diff).remote(x,v) if x.free_symbols else x, 
+                        product(dfsymb[d1], sym2))])
             
-            future = [*map(lambda e: isinstance(e, ray.ObjectRef), ret)]
-            ret[future] = ray.get(ret[future].tolist())
+                future = [*map(lambda e: isinstance(e, ray.ObjectRef), ret)]
+                ret[future] = ray.get(ret[future].tolist())
             
             h = ret.tolist()
             
