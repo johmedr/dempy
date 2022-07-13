@@ -94,8 +94,14 @@ def compute_dx(f, dfdx, t, isreg=False):
 from sympy.utilities.autowrap import autowrap
 import functools
 
+from itertools import chain, starmap, product
+import math
+from tqdm.autonotebook import tqdm
+
+import ray
+
 @functools.lru_cache
-def compute_sym_df_d2f(func, *dims, input_keys=None, wrt=None, cast_to=np.ndarray, wrap_type='lambdify'):
+def compute_sym_df_d2f(func, *dims, input_keys=None, wrt=None):
     """ 
     Use symbolic differentiation to compute jacobian and hessian of a function of 3 vectors. 
      - func: if the function to differentiate (must return a vector, ie a tensor (l, ...) where ... are empty or 1's)
@@ -104,17 +110,11 @@ def compute_sym_df_d2f(func, *dims, input_keys=None, wrt=None, cast_to=np.ndarra
      - df.dx, df.dv, and df.dp contains the jacobians wrt each argument
      - d2f.dx.dx, ... contains the ndim-hessians wrt each pair of arguments
 
-
-     TODO: change jacobian wrt numpy array to jacobian wrt 
+    Basically, it is faster for large expressions to derive wrt symarrays, however lambdified functions perform best
+    on MatrixSymbol. Thus, we differentiate wrt symarrays, .xreplace with MatrixSymbols and then lambdify
     """
-    if cast_to == np.ndarray: 
-        cast = lambda x: np.array(x, dtype=np.float64)
-    elif cast_to == torch.tensor: 
-        cast = lambda x: torch.from_numpy(np.array(x, dtype=np.float64))
-    elif callable(cast_to):
-        cast = cast_to
-    else: raise NotImplementedError()
-        
+    cast = lambda x: np.array(x, dtype=np.float64)
+    
     if input_keys is None: 
         import string
         input_keys = string.ascii_lowercase[:len(dims)]
@@ -137,33 +137,35 @@ def compute_sym_df_d2f(func, *dims, input_keys=None, wrt=None, cast_to=np.ndarra
 
     # create symbolic variables
     symvars = [
-        (f'd{k}', sympy.MatrixSymbol(k, *dim))
-        for k, dim in zip(input_keys, dims)
+        (f'd{k}', sympy.symarray(k, dim))
+        for k, dim in zip(input_keys, flatdims)
+    ]
+    
+    # create symbolic matrix symb
+    symmat = [
+        (f'd{k}', sympy.MatrixSymbol(k, dim, 1))
+        for k, dim in zip(input_keys, flatdims)
     ]
 
-    # wrap the symbols in numpy arrays
+    # symbols in column numpy arrays
     var = [
-        (k, np.array(symvar))
+        (k, symvar.reshape((-1, 1)))
         for k, symvar in symvars
-    ]
+    ]    
     
-    # create flat numpy variables (for differentiation)
-    flatvar = [
-        (k, v.reshape((flatdim,)))
-        for (k, v), flatdim in zip(var, flatdims)
-    ]
-    
-    
-    symargs = [v[1] for v in symvars]
+    symargs = [v[1] for v in symmat]
     args = [v[1] for v in var]
-
-
+    _vars = [v[1] for v in symvars]
+    
+    replace_dict = dict(chain(*starmap(zip, zip(_vars, symargs))))
+    
     fxvp = sympy.Matrix(func(*args))
     l = fxvp.shape[0]
 
+    
     dfsymb  = dotdict({
         d: fxvp.jacobian(sym)
-        for d, sym in flatvar
+        for d, sym in symvars
         if d in wrt
     })
 
@@ -171,30 +173,38 @@ def compute_sym_df_d2f(func, *dims, input_keys=None, wrt=None, cast_to=np.ndarra
     d2f = cdotdict()
 
 
-    for i, (d1, sym1) in enumerate(flatvar):
+    for i, (d1, sym1) in enumerate(symvars):
         if d1 not in wrt: continue 
             
         if d1 not in d2f.keys():
             d2f[d1] = cdotdict()
             
-        for j, (d2, sym2) in enumerate(flatvar): 
+        for j, (d2, sym2) in enumerate(symvars): 
+            
             if j < i: continue
             if d2 not in wrt: continue 
                 
             if d2 not in d2f.keys(): 
                 d2f[d2] = cdotdict()
 
-            h  = sympy.MutableDenseNDimArray((dfsymb[d1].reshape(l * sym1.shape[0], 1).jacobian(sym2)))
+
+            ret = np.asarray([*starmap(lambda x, v: 
+                    ray.remote(sympy.diff).remote(x,v) if x.free_symbols else x, 
+                    product(dfsymb[d1], sym2))])
+            
+            future = [*map(lambda e: isinstance(e, ray.ObjectRef), ret)]
+            ret[future] = ray.get(ret[future].tolist())
+            
+            h = ret.tolist()
+            
+#             h  = (dfsymb[d1].reshape(l * sym1.shape[0], 1).jacobian(sym2))
+            h  = sympy.MutableDenseNDimArray(h)
             h  = h.reshape(l, sym1.shape[0], sym2.shape[0])
-            h  = sympy.SparseMatrix(h.reshape(l, sym1.shape[0]*sym2.shape[0]))
+            h  = sympy.Matrix(h.reshape(l, sym1.shape[0]*sym2.shape[0]))
 
             if len(h.free_symbols) > 0: 
-                if wrap_type == 'autowrap':
-                    func_h  = autowrap(h, args=symargs)
-                    # func_t = autowrap(ht, args=h)
-                elif wrap_type == 'lambdify': 
-                    func_h  = sympy.lambdify(symargs, h, 'numpy', cse=False)
-                    # func_t = sympy.lambdify(h, ht, 'numpy', cse=False)
+                h       = h.xreplace(replace_dict)
+                func_h  = sympy.lambdify(symargs, h, cse=True)
 
                 d2f[d1][d2] = lambda *_args, _func=func_h, _target_shape=(l, *squeezedims[i], *squeezedims[j]):\
                     _func(*_args).reshape(_target_shape)
@@ -208,14 +218,10 @@ def compute_sym_df_d2f(func, *dims, input_keys=None, wrt=None, cast_to=np.ndarra
                 
         J = dfsymb[d1]
         if len(J.free_symbols) > 0:
-            if wrap_type == 'autowrap':
-                func_J  = autowrap(J, args=symargs)
-            elif wrap_type == 'lambdify': 
-                func_J  = sympy.lambdify(symargs, J, 'numpy', cse=False)
+            func_J  = sympy.lambdify(symargs, J.xreplace(replace_dict), 'numpy', cse=True)
 
             df[d1] = lambda *_args, _func=func_J, _target_shape=(l, *squeezedims[i]): _func(*_args).reshape(_target_shape)
         else: 
             df[d1] = lambda *_args, _symb=cast(J).reshape((l, *squeezedims[i])): _symb
         
     return df, d2f
-    
