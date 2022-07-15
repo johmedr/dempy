@@ -25,14 +25,22 @@ class cdotdict(dotdict):
                 map(lambda v: 
                     v(*args, **kwargs) if callable(v) else v, 
                     self.values())))
+from numba import njit
 
+@njit
 def kron(a, b): 
-    return (a[:, None, :, None] * b[None, :, None, :]).reshape((a.shape[0] * b.shape[0], a.shape[1] * b.shape[1]))
+    m, n = a.shape
+    p, q = b.shape
+    M, N = m * p, n * q
+    return (a.reshape((m, 1, n, 1)) * b.reshape((1, p, 1, q))).reshape((M, N))
 
+@njit
 def block_diag(*arrs): 
-    n   = sum(arr.shape[0] for arr in arrs)
-    m   = sum(arr.shape[1] for arr in arrs)
-    ret = np.zeros((n, m))
+    m, n = 0, 0
+    for arr in arrs: 
+        m += arr.shape[0]
+        n += arr.shape[1]
+    ret = np.zeros((m, n))
     nx,ny = 0,0
     for arr in arrs: 
         ni,nj = arr.shape
@@ -40,6 +48,7 @@ def block_diag(*arrs):
         nx += ni
         ny += nj
     return ret
+
 
 def block_matrix(nested_lists): 
 
