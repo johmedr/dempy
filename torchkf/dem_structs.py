@@ -27,14 +27,12 @@ class cdotdict(dotdict):
                     self.values())))
 from numba import njit
 
-@njit
 def kron(a, b): 
     m, n = a.shape
     p, q = b.shape
     M, N = m * p, n * q
     return (a.reshape((m, 1, n, 1)) * b.reshape((1, p, 1, q))).reshape((M, N))
 
-@njit
 def block_diag(*arrs): 
     m, n = 0, 0
     for arr in arrs: 

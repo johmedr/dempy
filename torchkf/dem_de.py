@@ -44,7 +44,14 @@ def dem_eval_err_diff(n: int, d: int, M: HierarchicalGaussianModel, qu: dotdict,
             v.append(vi)
             
             xi,vi,q,u,p = (_ if sum(_.shape) > 0 else np.empty(0) for _ in  (x[i], v[i], qp.p[i], qp.u[i], M[i].pE))
-            xvp = (xi, vi, p + u @ q)
+            puq = p + u @ q
+
+            if M[i].constraints is not None:
+                puq = puq
+                puq[M[i].constraints == 'positive'] =  np.exp(puq[M[i].constraints == 'positive']) - 1
+                puq[M[i].constraints == 'negative'] = -np.exp(puq[M[i].constraints == 'negative']) + 1
+
+            xvp = (xi, vi, puq)
             xvp = tuple(as_matrix_it(*xvp))
 
             try: 
@@ -69,9 +76,20 @@ def dem_eval_err_diff(n: int, d: int, M: HierarchicalGaussianModel, qu: dotdict,
         d2g = list()
         for i in range(nl - 1): 
             x,v,q,u,p = (_ if sum(_.shape) > 0 else np.empty(0) for _ in  (x[i], v[i], qp.p[i], qp.u[i], M[i].pE))
-            xvp = (x, v, p + u @ q)
-            xvp = tuple(as_matrix_it(*xvp))
+            puq = p + u @ q
 
+            if M[i].constraints is not None:
+                puq = puq
+                puq[M[i].constraints == 'positive'] =  np.exp(puq[M[i].constraints == 'positive'])
+                puq[M[i].constraints == 'negative'] = -np.exp(puq[M[i].constraints == 'negative'])
+                cu  = puq * u 
+                puq[M[i].constraints == 'positive'] -= 1
+                puq[M[i].constraints == 'negative'] += 1
+            else: 
+                cu = u
+
+            xvp = (xi, vi, puq)
+            xvp = tuple(as_matrix_it(*xvp))
 
             if M[i].df is not None:
                 dfi  = M[i].df(*xvp)
@@ -85,20 +103,22 @@ def dem_eval_err_diff(n: int, d: int, M: HierarchicalGaussianModel, qu: dotdict,
             else: 
                 dgi, d2gi = compute_df_d2f(M[i].g, xvp, ['dx', 'dv', 'dp']) 
 
-            dfi.dp = dfi.dp @ u
-            dgi.dp = dgi.dp @ u
 
-            d2fi.dx.dp = np.einsum('ijk,kl->ijl', d2fi.dx.dp, u)
-            d2fi.dv.dp = np.einsum('ijk,kl->ijl', d2fi.dv.dp, u)
+
+            dfi.dp = dfi.dp @ cu
+            dgi.dp = dgi.dp @ cu
+
+            d2fi.dx.dp = np.einsum('ijk,kl->ijl', d2fi.dx.dp, cu)
+            d2fi.dv.dp = np.einsum('ijk,kl->ijl', d2fi.dv.dp, cu)
             d2fi.dp.dx = d2fi.dx.dp.swapaxes(1, 2)
             d2fi.dp.dv = d2fi.dv.dp.swapaxes(1, 2)
-            d2fi.dp.dp = np.einsum('ik,aij,jl->akl', u, d2fi.dp.dp, u)
+            d2fi.dp.dp = np.einsum('ik,aij,jl->akl', u, d2fi.dp.dp, cu)
 
-            d2gi.dx.dp = np.einsum('ijk,kl->ijl', d2gi.dx.dp, u)
-            d2gi.dv.dp = np.einsum('ijk,kl->ijl', d2gi.dv.dp, u)
+            d2gi.dx.dp = np.einsum('ijk,kl->ijl', d2gi.dx.dp, cu)
+            d2gi.dv.dp = np.einsum('ijk,kl->ijl', d2gi.dv.dp, cu)
             d2gi.dp.dx = d2gi.dx.dp.swapaxes(1, 2)
             d2gi.dp.dv = d2gi.dv.dp.swapaxes(1, 2)
-            d2gi.dp.dp = np.einsum('ik,aij,jl->akl', u, d2gi.dp.dp, u)
+            d2gi.dp.dp = np.einsum('ik,aij,jl->akl', u, d2gi.dp.dp, cu)
 
             dg.append(dgi)
             df.append(dfi)

@@ -14,7 +14,7 @@ class GaussianModel(dotdict):
     def __init__(self, 
         f=None, g=None, fsymb=None, gsymb=None, m=None, n=None, l=None, p=None, x=None, v=None, 
         pE=None, pC=None, hE=None, hC=None, gE=None, gC=None, 
-        Q=None, R=None, V=None, W=None, xP=None, vP=None, sv=None, sw=None): 
+        Q=None, R=None, V=None, W=None, xP=None, vP=None, sv=None, sw=None, constraints=None): 
         self.f  : Callable         = f  # forward function (must be numpy compatible) - takes 3 vector arguments, return 1 vector of size n
         self.g  : Callable         = g  # observation function (must be numpy compatible) - takes 3 vector arguments, return 1 vector of size l
 
@@ -43,17 +43,15 @@ class GaussianModel(dotdict):
         self.xP : np.ndarray       = xP # precision (states)
         self.vP : np.ndarray       = vP # precision (inputs)
 
+        self.constraints: np.ndarray = constraints
+
         self.sv : np.ndarray       = sv # smoothness (input noise)
         self.sw : np.ndarray       = sw # smoothness (state noise)
 
         self.df      : dotdict     = None
         self.d2f     : dotdict     = None
-        self.df_qup  : dotdict     = None
-        self.d2f_qup : dotdict     = None
         self.dg      : dotdict     = None
         self.d2g     : dotdict     = None
-        self.dg_qup  : dotdict     = None
-        self.d2g_qup : dotdict     = None
 
         self.num_diff : bool       = False
 
@@ -100,8 +98,9 @@ class HierarchicalGaussianModel(list):
             elif len(M[i].pE.shape) == 1: 
                  M[i].pE = M[i].pE[..., None]
 
-            p      = M[i].pE.shape[0]
-            M[i].p = p
+            p       = M[i].pE.shape[0]
+            M[i].p  = p
+            M[i].nP = p # store the original number of params, p will be overidden by the number of singular values
 
             # and prior covariances pC
             if  M[i].pC is None:
@@ -118,6 +117,18 @@ class HierarchicalGaussianModel(list):
             # check size
             if M[i].pC.shape[0] != p or M[i].pC.shape[1] != p: 
                 raise ValueError(f'Wrong shape for model[{i}].pC: expected ({p},{p}) but got {M[i].pC.shape}.')
+
+            # expectations and covariances of constrained parameters
+            # ------------------------------------------------------
+            if M[i].constraints is not None: 
+                if M[i].constraints.size != M[i].p: 
+                    raise ValueError(f'The size of constraints ({M[i].constraints.size} '
+                        f'does not match that of parameter expectations ({M[i].p}).')
+                else: 
+                    M[i].pE[M[i].constraints == 'positive'] = np.log(1 + M[i].pE[M[i].constraints == 'positive'])
+                    M[i].pE[M[i].constraints == 'negative'] = np.log(1 - M[i].pE[M[i].constraints == 'negative'])
+                    M[i].pC[M[i].constraints == 'positive'] = np.log(1 + M[i].pC[M[i].constraints == 'positive'])
+                    M[i].pC[M[i].constraints == 'negative'] = np.log(1 + M[i].pC[M[i].constraints == 'negative'])
 
         # get inputs
         v = np.zeros((0,0)) if M[-1].v is None else M[-1].v

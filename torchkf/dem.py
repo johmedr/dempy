@@ -673,12 +673,12 @@ class DEMInversion:
                 # update conditional expectation
                 # ------------------------------
                 dp      = compute_dx(dFdp, dFdpp, te, isreg=True) 
-                qp.e   += dp[ip]
+                qp.e    = qp.e + dp[ip]
                 qp.p    = list()
                 npi     = 0
                 for i in range(nl - 1): 
-                    qp.p.append(qp.e[npi:npi + M[i].p])
-                    npi += M[i].p
+                    qp.p.append(qp.e[npi:npi + M[i].nP])
+                    npi += M[i].nP
                 qp.b    = dp[ib]
 
             else:
@@ -725,11 +725,20 @@ class DEMInversion:
         qH.C       = qh.c
 
         results.qH = qH
-
+        
         qP.P       = Up @ qp.e + np.concatenate([m.pE for m in M])
         qP.C       = Up @ qp.c[ip][:, ip] @ Up.T
         qP.dFdp    = Up @ dFdp[ip]
         qP.dFdpp   = Up @ dFdpp[ip][:, ip] @ Up.T
+
+        # remove constraints
+        npi     = 0
+        for i in range(nl - 1): 
+            qppi = qP.P[npi:npi + M[i].nP]
+            qppi[M[i].constraints == 'positive'] =  np.exp(qppi[M[i].constraints == 'positive']) - 1
+            qppi[M[i].constraints == 'negative'] = -np.exp(qppi[M[i].constraints == 'negative']) + 1
+            qP.P[npi:npi + M[i].nP] = qppi
+            npi += M[i].nP
 
         results.qP = qP
 

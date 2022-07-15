@@ -1,3 +1,7 @@
+import os
+os.environ['SYMPY_CACHE_SIZE'] = 'None'
+
+
 from .state_space_model import GaussianStateSpaceModel
 from .transformations import Gaussian, GaussianTransform, LinearTransform, LinearizedTransform, UnscentedTransform, \
     stack_distributions
