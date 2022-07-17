@@ -6,13 +6,14 @@ import numpy as np
 import symengine as si
 
 from itertools import chain, starmap, product, combinations_with_replacement
-import math
-from tqdm.autonotebook import tqdm
 
 from .dem_structs import *
 
-import ray
-
+def wrap_xvp(f): 
+    def _wraps(x,v,p): 
+        return np.array(
+            f(np.fromiter(chain(x.flat,v.flat,p.flat), dtype='d')), dtype='d')
+    return _wraps
 
 @functools.lru_cache
 def compile_symb_func(func, *dims, input_keys=None):
@@ -27,15 +28,15 @@ def compile_symb_func(func, *dims, input_keys=None):
 
     # create symbolic variables
     symvars = [
-        (f'd{k}', sympy.symarray(k, dim))
+        (f'd{k}', si.symarray(k, dim))
         for k, dim in zip(input_keys, flatdims)
     ]
     
-    # create symbolic matrix symb
-    symmat = [
-        (f'd{k}', sympy.MatrixSymbol(k, dim, 1))
-        for k, dim in zip(input_keys, flatdims)
-    ]
+    # # create symbolic matrix symb
+    # symmat = [
+    #     (f'd{k}', sympy.MatrixSymbol(k, dim, 1))
+    #     for k, dim in zip(input_keys, flatdims)
+    # ]
 
     # symbols in column numpy arrays
     var = [
@@ -43,24 +44,24 @@ def compile_symb_func(func, *dims, input_keys=None):
         for k, symvar in symvars
     ]    
     
-    symargs = [v[1] for v in symmat]
+    # symargs = [v[1] for v in symmat]
     args = [v[1] for v in var]
-    _vars = [v[1] for v in symvars]
+    # _vars = [v[1] for v in symvars]
+    # symvars = [*map(lambda v: (v[0], si.Matrix(v[1].tolist())), symvars)]
+
+    unpackvars = [*chain(*map(lambda v: v[1].flat, symvars))]
     
-    replace_dict = dict(chain(*starmap(zip, zip(_vars, symargs))))
+    # replace_dict = dict(chain(*starmap(zip, zip(_vars, symargs))))
     
-    symret = sympy.Matrix(func(*args))
-    
-    return sympy.lambdify(symargs, symret.xreplace(replace_dict), cse=True)
+    symret = func(*args)
+
+    func = wrap_xvp(si.lambdify(unpackvars, symret, cse=True))
+    func = lambda x,v,p,_shape=(symret.shape[0], 1),_func=func: _func(x,v,p).reshape(_shape)
+    return func
+
 
 @functools.lru_cache
-def wrap_xvp(f): 
-    def _wraps(x,v,p): 
-        return np.asarray(f(np.fromiter(chain(x.flat,v.flat,p.flat), dtype=np.float64)))
-    return _wraps
-
-@functools.lru_cache
-def compute_sym_df_d2f(func, *dims, input_keys=None, wrt=None):
+def compute_sym_df_d2f(func, *dims, input_keys=None, wrt=None, cse=True):
     """ 
     Use symbolic differentiation to compute jacobian and hessian of a function of 3 vectors. 
      - func: if the function to differentiate (must return a vector, ie a tensor (l, ...) where ... are empty or 1's)
@@ -102,16 +103,16 @@ def compute_sym_df_d2f(func, *dims, input_keys=None, wrt=None):
     
 
     # create symbolic variables
-    sympyvars = [
-        (f'd{k}', sympy.symarray(k, dim))
-        for k, dim in zip(input_keys, flatdims)
-    ]
+    # sympyvars = [
+    #     (f'd{k}', sympy.symarray(k, dim))
+    #     for k, dim in zip(input_keys, flatdims)
+    # ]
 
     # create symbolic matrix symb
-    symmat = [
-        (f'd{k}', sympy.MatrixSymbol(k, dim, 1))
-        for k, dim in zip(input_keys, flatdims)
-    ]
+    # symmat = [
+    #     (f'd{k}', sympy.MatrixSymbol(k, dim, 1))
+    #     for k, dim in zip(input_keys, flatdims)
+    # ]
 
     # symbols in column numpy arrays
     var = [
@@ -119,13 +120,13 @@ def compute_sym_df_d2f(func, *dims, input_keys=None, wrt=None):
         for k, symvar in symvars
     ]    
     
-    symargs = [v[1] for v in symmat]
+    # symargs = [v[1] for v in symmat]
     args = [v[1] for v in var]
     unpackvars = [*chain(*map(lambda v: v[1].flat, symvars))]
 
 
     symvars = [*map(lambda v: (v[0], si.Matrix(v[1].tolist())), symvars)]
-    _vars = [v[1] for v in symvars]
+    # _vars = [v[1] for v in symvars]
     
     # replace_dict = dict(chain(*starmap(zip, zip(_vars, symargs))))
     
@@ -200,7 +201,7 @@ def compute_sym_df_d2f(func, *dims, input_keys=None, wrt=None):
 
             if len(h.free_symbols) > 0: 
                 # h       = h.xreplace(replace_dict)
-                func_h  = wrap_xvp(si.lambdify(unpackvars, h, cse=True))
+                func_h  = wrap_xvp(si.lambdify(unpackvars, h, cse=cse))
 
                 d2f[d1][d2] = lambda *_args, _func=func_h, _target_shape=(l, *squeezedims[i], *squeezedims[j]):\
                     _func(*_args).reshape(_target_shape)
@@ -214,7 +215,7 @@ def compute_sym_df_d2f(func, *dims, input_keys=None, wrt=None):
         J = si.Matrix(dfsymb[d1].tolist())
         if len(J.free_symbols) > 0:
             # J = J.xreplace(replace_dict)
-            func_J  = wrap_xvp(si.lambdify(unpackvars, J, cse=True))
+            func_J  = wrap_xvp(si.lambdify(unpackvars, J, cse=cse))
 
             df[d1] = lambda *_args, _func=func_J, _target_shape=(l, *squeezedims[i]): _func(*_args).reshape(_target_shape)
         else: 

@@ -25,8 +25,7 @@ class cdotdict(dotdict):
                 map(lambda v: 
                     v(*args, **kwargs) if callable(v) else v, 
                     self.values())))
-from numba import njit
-
+        
 def kron(a, b): 
     m, n = a.shape
     p, q = b.shape

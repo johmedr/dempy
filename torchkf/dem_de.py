@@ -108,17 +108,21 @@ def dem_eval_err_diff(n: int, d: int, M: HierarchicalGaussianModel, qu: dotdict,
             dfi.dp = dfi.dp @ cu
             dgi.dp = dgi.dp @ cu
 
-            d2fi.dx.dp = np.einsum('ijk,kl->ijl', d2fi.dx.dp, cu)
-            d2fi.dv.dp = np.einsum('ijk,kl->ijl', d2fi.dv.dp, cu)
+            d2fi.dx.dp = d2fi.dx.dp @ cu
+            d2fi.dv.dp = d2fi.dv.dp @ cu
+            # d2fi.dx.dp = np.einsum('ijk,kl->ijl', d2fi.dx.dp, cu)
+            # d2fi.dv.dp = np.einsum('ijk,kl->ijl', d2fi.dv.dp, cu)
             d2fi.dp.dx = d2fi.dx.dp.swapaxes(1, 2)
             d2fi.dp.dv = d2fi.dv.dp.swapaxes(1, 2)
-            d2fi.dp.dp = np.einsum('ik,aij,jl->akl', u, d2fi.dp.dp, cu)
+            d2fi.dp.dp = np.einsum('ik,aij,jl->akl', cu, d2fi.dp.dp, cu)
 
-            d2gi.dx.dp = np.einsum('ijk,kl->ijl', d2gi.dx.dp, cu)
-            d2gi.dv.dp = np.einsum('ijk,kl->ijl', d2gi.dv.dp, cu)
+            d2gi.dx.dp = d2gi.dx.dp @ cu
+            d2gi.dv.dp = d2gi.dv.dp @ cu
+            # d2gi.dx.dp = np.einsum('ijk,kl->ijl', d2gi.dx.dp, cu)
+            # d2gi.dv.dp = np.einsum('ijk,kl->ijl', d2gi.dv.dp, cu)
             d2gi.dp.dx = d2gi.dx.dp.swapaxes(1, 2)
             d2gi.dp.dv = d2gi.dv.dp.swapaxes(1, 2)
-            d2gi.dp.dp = np.einsum('ik,aij,jl->akl', u, d2gi.dp.dp, cu)
+            d2gi.dp.dp = np.einsum('ik,aij,jl->akl', cu, d2gi.dp.dp, cu)
 
             dg.append(dgi)
             df.append(dfi)
