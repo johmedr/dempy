@@ -1,16 +1,12 @@
-from typing import Tuple
 import torch 
-import sympy
-import scipy as sp
-import scipy.linalg
+import warnings
+import numpy as np
+
+from typing import Tuple
 
 from .dem_structs import *
 from .dem_symb import *
-import math
 
-import warnings
-import numpy as np
-import joblib
 
 # necessary for sympy + numpy
 warnings.filterwarnings('ignore', category=FutureWarning)
@@ -24,7 +20,10 @@ def compute_df_d2f(func, inputs, input_keys=None) -> Tuple[dotdict, dotdict]:
     df.dk is the derivative wrt input indexed  by input key 'dk'
     d2f.di.dj is the 2nd-order derivative wrt inputs 'di' and 'dj'. 
     """
+    # This is deprecated in favor of symbolic differentiation
+
     raise NotImplementedError()
+
     if input_keys is None:
         input_keys = [f'dx{i}' for i in range(len(inputs))]
     else: 
@@ -75,20 +74,29 @@ def compute_df_d2f(func, inputs, input_keys=None) -> Tuple[dotdict, dotdict]:
     return df, d2f
 
 def compute_dx(f, dfdx, t, isreg=False): 
+    # Adapted from spm_dx
+    # Compute updates using local linearization (Ozaki 1985)
+
     if len(f.shape) == 1: 
         f = f[..., None]
 
     # if isreg we use t as a regularization parameter   
     if isreg:
-        t  = np.exp(t - np.linalg.slogdet(dfdx)[1]/f.shape[0])
+        t  = np.exp(t - np.linalg.slogdet(dfdx)[1] / f.shape[0])
 
     if f.shape[0] != dfdx.shape[0]: 
         raise ValueError(f'Shape mismatch: first dim of f {f.shape} must match that of df/dx {dfdx.shape}.')
+
     if len(f) == len(dfdx) == 0:
         return np.array([[]])
 
-    J = block_matrix([[np.zeros((1,1)), []], [f * t, dfdx * t]])
+    # use the exponentiation trick to avoid inverting dfdx
+    J  = block_matrix([
+        [np.zeros((1,1)),       []], 
+        [          f * t, dfdx * t]
+    ])
     dx = torch.matrix_exp(torch.from_numpy(J)).numpy()
+
     return dx[1:, 0, None]
 
 

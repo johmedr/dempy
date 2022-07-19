@@ -1,27 +1,18 @@
-import torch
-from .transformations import *
-from typing import Dict, Optional, List, Callable, Tuple
 import numpy as np
-from itertools import chain
 import logging
-import scipy as sp
-import scipy.linalg
-from pprint import pformat
+
 from tqdm.autonotebook import tqdm
-import pprint
+from itertools import chain
+from typing import Optional, List
+
 from .dem_de import *
 from .dem_z  import *
-
-
-logging.basicConfig()
-
-
 from .dem_structs import *
 from .dem_dx import *
 from .dem_hgm import *
 
-torch.set_default_dtype(torch.float64)
 
+logging.basicConfig()
 
 
 class DEMInversion: 
@@ -52,7 +43,7 @@ class DEMInversion:
         s   : float,          # s.d. of the noise process (1/sqrt(roughness))
         cov : bool = False    # whether to return the precision matrix 
         ):
-        """ Mimics the behavior of spm_DEM_R.m
+        """ Mimics the behavior of spm_DEM_R.m by Karl Friston
         s is the roughtness of the noise process. 
         """
         if s == 0:
@@ -81,7 +72,7 @@ class DEMInversion:
         dt   : int = 1          # sampling interval
         ):
         """ series: torch tensor (n_times, dim) 
-            inspired from spm_DEM_embed.m
+            inspired from spm_DEM_embed.m by Karl Friston
             series_generalized = T * [series[t-order/2], dots, series[t+order/2]]
         """
         n_times, dim = x.shape
@@ -116,11 +107,6 @@ class DEMInversion:
 
         slices = np.stack(slices, axis=0)
 
-        # series_slices is (n_times, order + 1, dim)
-        # T is ( order+1, order+1)
-        # generalized_coordinates = slices.swapaxes(1, 2) @ T.T
-
-        # return generalized_coordinates.swapaxes(1, 2)
         return slices
 
 
@@ -138,8 +124,7 @@ class DEMInversion:
             Mmin: int = 0, 
             ):
         log = self.logger
-
-        # torch.set_grad_enabled(False)
+        # Adapted from spm_DEM (and other dependancies) by Karl Friston 
 
         # miscellanous variables
         # ----------------------
@@ -505,21 +490,24 @@ class DEMInversion:
                     # -----------------
                     u = np.concatenate([qu.x.reshape((-1,1)), qu.v.reshape((-1,1)), qu.y.reshape((-1,1)), qu.u.reshape((-1,1))])
 
+                    # store gradient with precision as it appears a lot after
+                    dEdu_iS = dE.du.T @ iS
+
                     # first-order derivatives
-                    dVdu    = - dE.du.T @ iS @ E - dWdu/2 - Pu @ u[0:(nx+nv)*n]
+                    dVdu    = - dEdu_iS @ E - dWdu/2 - Pu @ u[0:(nx+nv)*n]
 
                     # second-order derivatives
-                    dVduu   = - dE.du.T @ iS @ dE.du - dWduu / 2 - Pu
-                    dVduy   = - dE.du.T @ iS @ dE.dy 
-                    dVduc   = - dE.du.T @ iS @ dE.dc
+                    dVduu   = - dEdu_iS @ dE.du - dWduu / 2 - Pu
+                    dVduy   = - dEdu_iS @ dE.dy 
+                    dVduc   = - dEdu_iS @ dE.dc
                     
                     # gradient
                     dFdu = np.concatenate([dVdu.reshape((-1,)), dVdy.reshape((-1,)), dVdc.reshape((-1,))], axis=0)
 
                     # Jacobian (variational flow)
                     dFduu = block_matrix([[dVduu, dVduy, dVduc],
-                                        [   [], dVdyy,    []],
-                                        [   [],    [], dVdcc]])
+                                          [   [], dVdyy,    []],
+                                          [   [],    [], dVdcc]])
 
                     # update conditional modes of states
                     f     = K * dFdu[..., None]  + D @ u
@@ -528,7 +516,7 @@ class DEMInversion:
                     q     = u + du
 
                     # ... and save them 
-                    qu.x = q[:nx * n].reshape((n, nx))
+                    qu.x = q[:n * nx].reshape((n, nx))
                     qu.v = q[n * nx:n * (nx + nv)].reshape((n, nv))
 
                     # ommit part for static models
@@ -544,10 +532,13 @@ class DEMInversion:
                     dWdp[ip]        = CJu.T @ (dE.du.T).reshape((-1,1))
                     dWdpp[ip,ip]    = CJu.T @ dEdup
 
+                # store gradient with precision as it appears a lot after
+                dEdP_iS = dE.dP.T @ iS
+
                 # Accumulate dF/dP = <dL/dp>, dF/dpp = ... 
-                dFdp[:, :]  = dFdp  - dWdp / 2 - (dE.dP.T @ iS @ E)
-                dFdpp[:,:]  = dFdpp - dWdpp /2 - dE.dP.T @ iS @ dE.dP
-                qp.ic       = qp.ic + dE.dP.T @ iS @ dE.dP
+                dFdp[:, :]  = dFdp  - dWdp / 2 - dEdP_iS @ E
+                dFdpp[:,:]  = dFdpp - dWdpp /2 - dEdP_iS @ dE.dP
+                qp.ic       = qp.ic + dEdP_iS @ dE.dP
 
                 # and quantities for M-step 
                 EE  = E @ E.T + EE
@@ -749,8 +740,7 @@ class DEMInversion:
         return results
 
     def generate(self, nT, u=None): 
-
-        # torch.set_grad_enabled(False)
+        # Adapted from spm_DEM_generate by Karl Friston
 
         n  = self.n                 # Derivative order
         M  = self.M

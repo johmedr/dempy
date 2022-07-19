@@ -1,11 +1,9 @@
-from sympy.utilities.autowrap import autowrap
 import functools
-import sympy
 import math
 import numpy as np
 import symengine as si
 
-from itertools import chain, starmap, product, combinations_with_replacement
+from itertools import chain, starmap, product
 
 from .dem_structs import *
 
@@ -14,6 +12,7 @@ def wrap_xvp(f):
         return np.array(
             f(np.fromiter(chain(x.flat,v.flat,p.flat), dtype='d')), dtype='d')
     return _wraps
+
 
 @functools.lru_cache
 def compile_symb_func(func, *dims, input_keys=None):
@@ -31,12 +30,6 @@ def compile_symb_func(func, *dims, input_keys=None):
         (f'd{k}', si.symarray(k, dim))
         for k, dim in zip(input_keys, flatdims)
     ]
-    
-    # # create symbolic matrix symb
-    # symmat = [
-    #     (f'd{k}', sympy.MatrixSymbol(k, dim, 1))
-    #     for k, dim in zip(input_keys, flatdims)
-    # ]
 
     # symbols in column numpy arrays
     var = [
@@ -44,19 +37,14 @@ def compile_symb_func(func, *dims, input_keys=None):
         for k, symvar in symvars
     ]    
     
-    # symargs = [v[1] for v in symmat]
     args = [v[1] for v in var]
-    # _vars = [v[1] for v in symvars]
-    # symvars = [*map(lambda v: (v[0], si.Matrix(v[1].tolist())), symvars)]
-
-    unpackvars = [*chain(*map(lambda v: v[1].flat, symvars))]
-    
-    # replace_dict = dict(chain(*starmap(zip, zip(_vars, symargs))))
-    
     symret = func(*args)
 
+    unpackvars = [*chain(*map(lambda v: v[1].flat, symvars))]
+
     func = wrap_xvp(si.lambdify(unpackvars, symret, cse=True))
-    func = lambda x,v,p,_shape=(symret.shape[0], 1),_func=func: _func(x,v,p).reshape(_shape)
+    func = lambda x, v, p, _shape=(symret.shape[0], 1), _func=func: _func(x,v,p).reshape(_shape)
+
     return func
 
 
@@ -69,9 +57,9 @@ def compute_sym_df_d2f(func, *dims, input_keys=None, wrt=None, cse=True):
     Returns: (df, d2f) where: 
      - df.dx, df.dv, and df.dp contains the jacobians wrt each argument
      - d2f.dx.dx, ... contains the ndim-hessians wrt each pair of arguments
-
-    Basically, it is faster for large expressions to derive wrt symarrays, however lambdified functions perform best
-    on MatrixSymbol. Thus, we differentiate wrt symarrays, .xreplace with MatrixSymbols and then lambdify
+    Note that for performance, only d2f[ki][kj] with input_keys.index(ki) < input_keys.index(kj) is populated
+    while d2f[kj][ki] is not. 
+    Use that fact that 'd2f[kj][ki] = d2f[ki][kj].swapaxes(1, 2)' to get it.  
     """
     cast = lambda x: np.array(x, dtype=np.float64)
     
@@ -100,19 +88,6 @@ def compute_sym_df_d2f(func, *dims, input_keys=None, wrt=None, cse=True):
         (f'd{k}', si.symarray(k, dim))
         for k, dim in zip(input_keys, flatdims)
     ]
-    
-
-    # create symbolic variables
-    # sympyvars = [
-    #     (f'd{k}', sympy.symarray(k, dim))
-    #     for k, dim in zip(input_keys, flatdims)
-    # ]
-
-    # create symbolic matrix symb
-    # symmat = [
-    #     (f'd{k}', sympy.MatrixSymbol(k, dim, 1))
-    #     for k, dim in zip(input_keys, flatdims)
-    # ]
 
     # symbols in column numpy arrays
     var = [
@@ -120,29 +95,31 @@ def compute_sym_df_d2f(func, *dims, input_keys=None, wrt=None, cse=True):
         for k, symvar in symvars
     ]    
     
-    # symargs = [v[1] for v in symmat]
+    # arguments for calling the function (numpy.ndarrays column vectors)
     args = [v[1] for v in var]
-    unpackvars = [*chain(*map(lambda v: v[1].flat, symvars))]
 
-
-    symvars = [*map(lambda v: (v[0], si.Matrix(v[1].tolist())), symvars)]
-    # _vars = [v[1] for v in symvars]
-    
-    # replace_dict = dict(chain(*starmap(zip, zip(_vars, symargs))))
-    
+    # Call function 
+    # -------------
     fxvp = si.Matrix(func(*args).tolist())
     l = fxvp.shape[0]
 
-    
+    # arguments to lambdify wrt 
+    unpackvars = [*chain(*map(lambda v: v[1].flat, symvars))]
+
+    # arguments to differentiate wrt
+    symvars = [*map(lambda v: (v[0], si.Matrix(v[1].tolist())), symvars)]
+
+    # Compute first-order derivatives 
+    # -------------------------------
     dfsymb  = dotdict({
         d: si.Matrix(fxvp.jacobian(sym))
         for d, sym in symvars
         if d in wrt
     })
 
+    # callable dotdicts for output 
     df  = cdotdict()
     d2f = cdotdict()
-
 
     for i, (d1, sym1) in enumerate(symvars):
         if d1 not in wrt: continue 
@@ -151,14 +128,17 @@ def compute_sym_df_d2f(func, *dims, input_keys=None, wrt=None, cse=True):
             d2f[d1] = cdotdict()
             
         for j, (d2, sym2) in enumerate(symvars): 
+            # Compute second-order derivatives
+            # --------------------------------
             
-            if j < i: continue
-            if d2 not in wrt: continue 
-                
+            # we only populate the upper triangle (just use .swapaxes(1, 2) to get the other side)
+            if j < i: continue 
+
+            if d2 not in wrt: continue                 
             if d2 not in d2f.keys(): 
                 d2f[d2] = cdotdict()
 
-
+            # use symmetry for d2f{j}/dx{i}^2 (removes n(n-1)/2 operations)
             if i ==  j:
                 compute  = [*map(lambda idxs: idxs[1] <= idxs[2], 
                     product(range(l), range(sym1.shape[0]), range(sym2.shape[0])))]
@@ -170,51 +150,31 @@ def compute_sym_df_d2f(func, *dims, input_keys=None, wrt=None, cse=True):
                 ret = np.asarray([*starmap(lambda ok, xv: 
                         si.diff(*xv) if xv[0].free_symbols and ok else xv[0], 
                         zip(compute, product(dfsymb[d1], sym2)))])
-                # ret = np.asarray([*starmap(lambda ok, xv: 
-                #         ray.remote(si.diff).remote(*xv) if xv[0].free_symbols and ok else xv[0], 
-                #         zip(compute, product(dfsymb[d1], sym2)))])
-                # future = [*map(lambda e: isinstance(e, ray.ObjectRef), ret)]
-                # ret[future] = ray.get(ret[future].tolist())
 
                 ret[infer_to] = ret[infer_from]
 
+            # general case
             else: 
                 ret = np.asarray([*starmap(lambda x, v: 
                         si.diff(x, v) if x.free_symbols else x, 
                         product(dfsymb[d1], sym2))])
-                
-                # ret = np.asarray([*starmap(lambda x, v: 
-                #         ray.remote(si.diff).remote(x,v) if x.free_symbols else x, 
-                #         product(dfsymb[d1], sym2))])
 
-            
-                # future = [*map(lambda e: isinstance(e, ray.ObjectRef), ret)]
-                # ret[future] = ray.get(ret[future].tolist())
-            
-            # h = ret.tolist()
+            # make a SymEngine matrix
+            h  = si.Matrix(ret.reshape(l, sym1.shape[0]*sym2.shape[0]).tolist())
 
-            
-#             h  = (dfsymb[d1].reshape(l * sym1.shape[0], 1).jacobian(sym2))
-            # h  = si.MutableDenseNDimArray(h)
-            h  = ret.reshape(l, sym1.shape[0], sym2.shape[0])
-            h  = si.Matrix(h.reshape(l, sym1.shape[0]*sym2.shape[0]).tolist())
-
+            # create a function if h has free (dependent) symbols
             if len(h.free_symbols) > 0: 
-                # h       = h.xreplace(replace_dict)
                 func_h  = wrap_xvp(si.lambdify(unpackvars, h, cse=cse))
 
                 d2f[d1][d2] = lambda *_args, _func=func_h, _target_shape=(l, *squeezedims[i], *squeezedims[j]):\
                     _func(*_args).reshape(_target_shape)
 
-                d2f[d2][d1] = lambda *_args, _func=func_h, _interm_shape=(l, sym1.shape[0], sym2.shape[0]), _target_shape=(l, *squeezedims[j], *squeezedims[i]):\
-                    _func(*_args).reshape(_interm_shape).swapaxes(1, 2).reshape(_target_shape)
             else:
                 d2f[d1][d2] = lambda *_args, _symb=cast(h.tolist()).reshape((l, *squeezedims[i], *squeezedims[j])): _symb
-                d2f[d2][d1] = lambda *_args, _symb=cast(h.tolist()).reshape((l, sym1.shape[0], sym2.shape[0])).swapaxes(1, 2).reshape((l, *squeezedims[j], *squeezedims[i])): _symb
               
-        J = si.Matrix(dfsymb[d1].tolist())
+        # create a jacobian if J has free (dependent) symbols
+        J = dfsymb[d1]
         if len(J.free_symbols) > 0:
-            # J = J.xreplace(replace_dict)
             func_J  = wrap_xvp(si.lambdify(unpackvars, J, cse=cse))
 
             df[d1] = lambda *_args, _func=func_J, _target_shape=(l, *squeezedims[i]): _func(*_args).reshape(_target_shape)

@@ -32,6 +32,24 @@ def kron(a, b):
     M, N = m * p, n * q
     return (a.reshape((m, 1, n, 1)) * b.reshape((1, p, 1, q))).reshape((M, N))
 
+def kron_eye(A, N, M=None):  # Simulates np.kron(np.eye(N, M), A)
+    m, n = A.shape    
+    if M is None: 
+        out = np.zeros((N,m,N,n), dtype=A.dtype)
+        diag = np.einsum('ijik->ijk',out)
+        diag[:] = A
+        out.shape = (-1,n*N)
+
+    else: 
+        K   = N if N >= M else M
+        out = np.zeros((K,m,K,n), dtype=A.dtype)
+        diag = np.einsum('ijik->ijk',out)
+        diag[:] = A
+        out = out[:N,:,:M,:] 
+        out.shape = (-1,n*M)
+        
+    return out
+
 def block_diag(*arrs): 
     m, n = 0, 0
     for arr in arrs: 
@@ -48,12 +66,6 @@ def block_diag(*arrs):
 
 
 def block_matrix(nested_lists): 
-
-    # TODO: use np.blocks instead...
-
-    # a is a list of list [[[], [], tensor], [[], tensor, []], [tensor, [], []]]
-    # row and column size must be similar
-
     row_sizes = [0] * len(nested_lists)
     col_sizes = [0] * len(nested_lists[0])
 
@@ -62,37 +74,36 @@ def block_matrix(nested_lists):
             raise ValueError(f'Invalid number of columns at row {i + 1}:'
                              f' expected {len(col_sizes)}, got {len(row)}.')
 
-        row_sizes[i] = 0
+        M = row_sizes[i]
         for j, e in enumerate(row): 
-            if len(e) > 0: 
+            if len(e):
+                m, n = e.shape
+                N = col_sizes[j]
+                    
                 # check for height
-                if row_sizes[i]  > 0: 
-                    if e.shape[0] != row_sizes[i]: 
+                if M and m != M: 
                         raise ValueError('Unable to build block matrix: the number of rows at block-index ({},{}) (shape {}) does not match that of the previous block (expected {}).'.format(i,j,e.shape,row_sizes[i]))
-                
-                else: 
-                    row_sizes[i]  = e.shape[0]
 
                 # check for width
-                if col_sizes[j] > 0:
-                    if e.shape[1] != col_sizes[j]: 
+                if N and n != N: 
                         raise ValueError('Unable to build block matrix: the number of columns at block-index ({},{}) (shape {}) does not match that of the previous block (expected {}).'.format(i,j,e.shape,col_sizes[j]))
-                
-                else: 
-                    col_sizes[j] = e.shape[1]
 
-    arr = []
-    for i, row in enumerate(nested_lists): 
-        arr_row = []
-        for j, e in enumerate(row): 
-            if len(e) > 0: 
-                arr_row.append(e)
-            else: 
-                arr_row.append(np.zeros((row_sizes[i], col_sizes[j])))
-
-        arr.append(np.concatenate(arr_row, axis=1))
-
-    return np.concatenate(arr, axis=0)
+                row_sizes[i], col_sizes[j] = m, n
+                    
+    M = sum(row_sizes)
+    N = sum(col_sizes)
+    
+    out = np.zeros((M, N))
+    i = 0
+    for I, nx in enumerate(row_sizes): 
+        j  = 0
+        for J, ny in enumerate(col_sizes):
+            e  = nested_lists[I][J]
+            if len(e): 
+                out[i:i+nx,j:j+ny] = e
+            j += ny
+        i += nx
+    return out
 
 
 class cell(list): 

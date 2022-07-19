@@ -1,13 +1,11 @@
 import numpy as np
+import warnings
+import time
+
 from math import prod
 
 from .dem_structs import *
 from .dem_dx import compute_sym_df_d2f, compile_symb_func
-
-import warnings
-
-import time
-
 
 
 class GaussianModel(dotdict): 
@@ -64,6 +62,8 @@ class HierarchicalGaussianModel(list):
         super().__init__(models)
 
     def prepare_models(self, *models):
+        # inspired from spm_DEM_set by Karl Friston
+
         M = list(models)
 
         # order 
@@ -125,10 +125,10 @@ class HierarchicalGaussianModel(list):
                     raise ValueError(f'The size of constraints ({M[i].constraints.size} '
                         f'does not match that of parameter expectations ({M[i].p}).')
                 else: 
-                    M[i].pE[M[i].constraints == 'positive'] = np.log(1 + M[i].pE[M[i].constraints == 'positive'])
-                    M[i].pE[M[i].constraints == 'negative'] = np.log(1 - M[i].pE[M[i].constraints == 'negative'])
-                    M[i].pC[M[i].constraints == 'positive'] = np.log(1 + M[i].pC[M[i].constraints == 'positive'])
-                    M[i].pC[M[i].constraints == 'negative'] = np.log(1 + M[i].pC[M[i].constraints == 'negative'])
+                    M[i].pE[M[i].constraints == 'positive'] = np.log(M[i].pE[M[i].constraints == 'positive'])
+                    M[i].pE[M[i].constraints == 'negative'] = np.log(- M[i].pE[M[i].constraints == 'negative'])
+                    M[i].pC[M[i].constraints == 'positive'] = np.log(1+M[i].pC[M[i].constraints == 'positive'])
+                    M[i].pC[M[i].constraints == 'negative'] = np.log(1+M[i].pC[M[i].constraints == 'negative'])
 
         # get inputs
         v = np.zeros((0,0)) if M[-1].v is None else M[-1].v
@@ -207,8 +207,7 @@ class HierarchicalGaussianModel(list):
                         print(f'f() ok. (compiled in {(time.time() - start_time):.2f}s)')
 
                     except Exception as e: 
-                        warnings.warn(f'Failed to obtain analytical derivatives for M[{i}].f. Inversion might be slower.\n'
-                            f'Failed with error: \n')
+                        raise RuntimeError(f'Failed to obtain analytical derivatives for M[{i}].f.')
                         raise e
 
                 elif M[i].df is not None and M[i].d2f is not None:
@@ -226,10 +225,8 @@ class HierarchicalGaussianModel(list):
                         M[i].dg, M[i].d2g = compute_sym_df_d2f(gfunc, M[i].n, M[i].m, M[i].p, input_keys='xvp')
                         print(f'g() ok. (compiled in {(time.time() - start_time):.2f}s)')
 
-                    except Exception as e: 
-                        warnings.warn(f'Failed to obtain analytical derivatives for M[{i}].g. Inversion might be slower.\n'
-                            f'Failed with error: \n')
-                        raise e
+                    except Exception: 
+                        raise RuntimeError(f'Failed to obtain analytical derivatives for M[{i}].g.')
 
                 elif M[i].dg is not None and M[i].d2g is not None:
                     pass
