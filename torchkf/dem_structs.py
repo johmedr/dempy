@@ -38,7 +38,7 @@ def kron_eye(A, N, M=None):  # Simulates np.kron(np.eye(N, M), A)
         out = np.zeros((N,m,N,n), dtype=A.dtype)
         diag = np.einsum('ijik->ijk',out)
         diag[:] = A
-        out.shape = (-1,n*N)
+        out.shape = (m*N,n*N)
 
     else: 
         K   = N if N >= M else M
@@ -46,7 +46,7 @@ def kron_eye(A, N, M=None):  # Simulates np.kron(np.eye(N, M), A)
         diag = np.einsum('ijik->ijk',out)
         diag[:] = A
         out = out[:N,:,:M,:] 
-        out.shape = (-1,n*M)
+        out.shape = (m*N,n*M)
         
     return out
 

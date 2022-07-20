@@ -17,10 +17,10 @@ def dem_z(M: HierarchicalGaussianModel, N: int):
     for i in range(nl): 
         # temporal correlation matrix with unit variance
         Kv = sp.linalg.toeplitz(np.exp(-t**2 / (2 * M[i].sv**2)))
-        Kv = np.diag(1. / np.sqrt( np.diag(Kv @ Kv.T) )) @ Kv
+        Kv = Kv @ np.diag(1. / np.sqrt( np.diag(Kv @ Kv.T) ))
 
         Kw = sp.linalg.toeplitz(np.exp(-t**2 / (2 * M[i].sw**2)))
-        Kw = np.diag(1. / np.sqrt( np.diag(Kw @ Kw.T) )) @ Kw
+        Kw = Kw @ np.diag(1. / np.sqrt( np.diag(Kw @ Kw.T) ))
 
         # prior expectation on causes
         P  = M[i].V

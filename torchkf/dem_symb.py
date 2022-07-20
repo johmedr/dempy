@@ -14,7 +14,6 @@ def wrap_xvp(f):
     return _wraps
 
 
-@functools.lru_cache
 def compile_symb_func(func, *dims, input_keys=None):
     if input_keys is None: 
         import string
@@ -48,7 +47,6 @@ def compile_symb_func(func, *dims, input_keys=None):
     return func
 
 
-@functools.lru_cache
 def compute_sym_df_d2f(func, *dims, input_keys=None, wrt=None, cse=True):
     """ 
     Use symbolic differentiation to compute jacobian and hessian of a function of 3 vectors. 

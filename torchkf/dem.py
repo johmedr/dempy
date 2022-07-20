@@ -59,7 +59,7 @@ class DEMInversion:
             filt = np.logical_and(j >= 0, j < p)
             S[i,j[filt]] = (-1) ** (i) * r[filt]
 
-        R = np.linalg.inv(S)#.contiguous()
+        R = np.linalg.inv(S)
 
         if cov: 
             return S, R
@@ -92,9 +92,8 @@ class DEMInversion:
         X = np.zeros((n_times, p, dim))
         
         for t in times:
-            s = t / dt
-            k = ks + int(np.fix(s - (p + 1) / 2))
-            y = s - min(k) + 1
+            k = ks + int(np.fix(float(t) - (p + 1) / 2))
+            y = float(t) - min(k) + 1
             k = np.clip(k, 1, n_times)
 
             # Create T_ij(t) (note that indices start at 0) 
@@ -126,6 +125,19 @@ class DEMInversion:
             ):
         log = self.logger
         # Adapted from spm_DEM (and other dependancies) by Karl Friston 
+        """ 
+         Some notes:
+            - E, dE are in order (y, v, x), outputs/causes come before states
+                - this is respected in dem_de
+                - this is respected in iS (precision of generalized errors)
+
+            - u, d_.du are in order (x, v, y, u), states come first, then causes, outputs and inputs. 
+                - this is respected by derivative operators (D)
+                - henceforth, qU.p and qU.c (precision and covariance of generalized states and causes) are in the same order
+                because computed as dE.du.T @ iS @ dE.du.T + ...  
+
+            - by convention, shape order is (time, embedding order, variable dimension), e.g. (nT, n, nx)
+        """
 
         # miscellanous variables
         # ----------------------
@@ -218,8 +230,8 @@ class DEMInversion:
         for i in range(nl): 
             # Precision (R) and covariance of generalized errors
             # --------------------------------------------------
-            iVv    = DEMInversion.generalized_covariance(n, M[i].sv)
-            iVw    = DEMInversion.generalized_covariance(n, M[i].sw)
+            iVv    = DEMInversion.generalized_covariance(n, M[i].sv * M.dt)
+            iVw    = DEMInversion.generalized_covariance(n, M[i].sw * M.dt)
 
             # noise on causal states (Q)
             # --------------------------
@@ -375,7 +387,6 @@ class DEMInversion:
         je = np.diag(Qp) < np.exp(16)
         ju = np.concatenate([je[ix], je[iv]])
 
-
         # E-step: (with) embedded D- and M-steps) 
         # =======================================
         Fi = - np.inf
@@ -397,7 +408,7 @@ class DEMInversion:
 
             # [re-]set precisions using ReML hyperparameter estimates
             # -------------------------------------------------------
-            iS    = Qp + sum(Q[i] * np.exp(qh.h[i]) for i in range(nh))
+            iS  = Qp + sum(Q[i] * np.exp(qh.h[i]) for i in range(nh))
 
             # [re-]adjust for confounds
             # -------------------------
@@ -513,7 +524,7 @@ class DEMInversion:
                     # update conditional modes of states
                     f     = K * dFdu[..., None]  + D @ u
                     dfdu  = K * dFduu + D
-                    du    = compute_dx(f, dfdu, td)
+                    du    = compute_dx(f, dfdu, td * dt)
                     q     = u + du
 
                     # ... and save them 
@@ -855,6 +866,7 @@ class DEMInversion:
             w = np.concatenate(wi, axis=1)
 
             # x[0, :] = 
+
             x[1, :] = f + w[0]
 
             # compute higher orders
@@ -864,12 +876,12 @@ class DEMInversion:
             
             dgdv = kron(np.diag(np.ones((n-1,)),1), dgdv)
             dgdx = kron(np.diag(np.ones((n-1,)),1), dgdx)
-            dfdv = kron(np.eye(n), dfdv)
-            dfdx = kron(np.eye(n), dfdx)
+            dfdv = kron_eye(dfdv, n)
+            dfdx = kron_eye(dfdx, n)
 
             # Save realization
-            V[t] = v
-            X[t] = x
+            V[t] = v.copy()
+            X[t] = x.copy()
             
             J    = block_matrix([
                 [dgdv, dgdx,   Dv,   []] , 

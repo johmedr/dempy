@@ -6,8 +6,10 @@ from .dem_dx import *
 
 def as_matrix_it(*args):
     for arg in args: 
-        yield arg.reshape((arg.shape[0], -1))
-        
+        if arg.size > 0: 
+            yield arg.reshape((arg.shape[0], -1)) 
+        else: 
+            yield arg.reshape((0, 1)) 
 
 def dem_eval_err_diff(n: int, d: int, M: HierarchicalGaussianModel, qu: dotdict, qp: dotdict): 
     # inspired by spm_DEM_eval_diff and other deps., by Karl Friston 
