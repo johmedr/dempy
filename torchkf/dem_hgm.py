@@ -142,7 +142,7 @@ class HierarchicalGaussianModel(list):
 
         # check functions
         for i in reversed(range(g - 1)):
-            x      = np.zeros((M[i].n, 1)) if M[i].x is None else M[i].x
+            x = np.zeros((M[i].n, 1)) if M[i].x is None else M[i].x
 
             if prod(x.shape) == 0 and M[i].n > 0:
                 x = np.zeros((M[i].n, 1))
@@ -281,16 +281,23 @@ class HierarchicalGaussianModel(list):
             M[i].gE = np.zeros((len(M[i].R), 1)) if M[i].gE is None else np.array(M[i].gE).reshape((-1,1))
 
             #  check hyperpriors (covariances)
-            try:
-                assert(M[i].hC is not None)
-                M[i].hC * M[i].hE
-            except: 
+            if M[i].hC is None: 
                 M[i].hC = np.eye(len(M[i].hE)) / pP 
-            try:
-                assert(M[i].gC is not None)
-                M[i].gC * M[i].gE
-            except: 
+            else:
+                try:
+                    M[i].hC * M[i].hE
+                except: 
+                    warnings.warn(f'Failed to compute M[{i}].hC * M[{i}].hE. Setting M[{i}].hC to identity.')
+                    M[i].hC = np.eye(len(M[i].hE)) / pP 
+
+            if M[i].gC is None: 
                 M[i].gC = np.eye(len(M[i].gE)) / pP 
+            else: 
+                try:
+                    M[i].gC * M[i].gE
+                except: 
+                    warnings.warn(f'Failed to compute M[{i}].gC * M[{i}].hE. Setting M[{i}].gC to identity.')
+                    M[i].gC = np.eye(len(M[i].gE)) / pP 
  
             # check Q and R (precision components)
 
@@ -333,8 +340,11 @@ class HierarchicalGaussianModel(list):
                 M[i].V = np.diag(M[i].V)
             elif len(M[i].V) != M[i].l:
                 try: 
-                    M[i].V = np.eye(M[i].l) * M[i].V[0]
+                    M[i].V = np.eye(M[i].l) * M[i].V[0]                
                 except:
+                    if len(M[i].V) > 0: 
+                        warnings.warn(f'Failed to compute eye({M[i].l}) * M[{i}].V[0].')
+
                     if len(M[i].hE) == 0:
                         M[i].V = np.eye(M[i].l)
                     else: 
@@ -346,6 +356,9 @@ class HierarchicalGaussianModel(list):
                 try: 
                     M[i].W = np.eye(M[i].n) * M[i].W[0]
                 except:
+                    if len(M[i].W) > 0: 
+                        warnings.warn(f'Failed to compute eye({M[i].n}) * M[{i}].W[0].')
+
                     if len(M[i].gE) == 0:
                         M[i].W = np.eye(M[i].n)
                     else: 
@@ -355,5 +368,5 @@ class HierarchicalGaussianModel(list):
             s = 0 if nx == 0 else 1/2.
             M[i].sv = s if M[i].sv is None else M[i].sv
             M[i].sw = s if M[i].sw is None else M[i].sw
-
+            
         return M
