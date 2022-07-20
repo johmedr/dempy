@@ -45,8 +45,8 @@ def dem_eval_err_diff(n: int, d: int, M: HierarchicalGaussianModel, qu: dotdict,
 
         if M[i].constraints is not None:
             puq = puq
-            puq[M[i].constraints == 'positive'] =  np.exp(puq[M[i].constraints == 'positive']) 
-            puq[M[i].constraints == 'negative'] = -np.exp(puq[M[i].constraints == 'negative']) 
+            puq[M[i].constraints == 'positive'] = np.maximum(0, np.exp(puq[M[i].constraints == 'positive']) - 1)
+            puq[M[i].constraints == 'negative'] = np.minimum(-np.exp(puq[M[i].constraints == 'negative']) + 1,0)
 
         xvp = (xi, vi, puq)
         xvp = tuple(as_matrix_it(*xvp))
@@ -80,6 +80,8 @@ def dem_eval_err_diff(n: int, d: int, M: HierarchicalGaussianModel, qu: dotdict,
             puq[M[i].constraints == 'positive'] =  np.exp(puq[M[i].constraints == 'positive'])
             puq[M[i].constraints == 'negative'] = -np.exp(puq[M[i].constraints == 'negative'])
             cu  = puq * u 
+            puq[M[i].constraints == 'positive'] = np.maximum(0, puq[M[i].constraints == 'positive'] - 1)
+            puq[M[i].constraints == 'negative'] = np.minimum(puq[M[i].constraints == 'negative'] + 1,0)
             # puq[M[i].constraints == 'positive'] -= 1
             # puq[M[i].constraints == 'negative'] += 1
         else: 

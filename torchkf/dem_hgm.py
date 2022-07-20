@@ -125,8 +125,8 @@ class HierarchicalGaussianModel(list):
                     raise ValueError(f'The size of constraints ({M[i].constraints.size} '
                         f'does not match that of parameter expectations ({M[i].p}).')
                 else: 
-                    M[i].pE[M[i].constraints == 'positive'] = np.log(M[i].pE[M[i].constraints == 'positive'])
-                    M[i].pE[M[i].constraints == 'negative'] = np.log(- M[i].pE[M[i].constraints == 'negative'])
+                    M[i].pE[M[i].constraints == 'positive'] = np.log(1 + M[i].pE[M[i].constraints == 'positive'])
+                    M[i].pE[M[i].constraints == 'negative'] = np.log(1 - M[i].pE[M[i].constraints == 'negative'])
                     M[i].pC[M[i].constraints == 'positive'] = np.log(1+M[i].pC[M[i].constraints == 'positive'])
                     M[i].pC[M[i].constraints == 'negative'] = np.log(1+M[i].pC[M[i].constraints == 'negative'])
 

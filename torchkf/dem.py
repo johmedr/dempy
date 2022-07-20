@@ -76,38 +76,39 @@ class DEMInversion:
             series_generalized = T * [series[t-order/2], dots, series[t+order/2]]
         """
         n_times, dim = x.shape
-        E = np.zeros((p, p))
-        x = np.array(x)
+        
+        # Make sure the input is a numpy array 
+        x     = np.array(x, dtype='d')
+        
+        # Time and embedding order
         times = np.arange(1, n_times + 1)
+        ks    = np.arange(1, p + 1)
+        
+        # Taylor's expansion forward (T) and inverse (E) operators
+        T = np.empty((p, p), dtype='d')
+        E = np.empty((p, p), dtype='d')
+        
+        # Embedded time series (for output)
+        X = np.zeros((n_times, p, dim))
+        
+        for t in times:
+            s = t / dt
+            k = ks + int(np.fix(s - (p + 1) / 2))
+            y = s - min(k) + 1
+            k = np.clip(k, 1, n_times)
 
-        # Create E_ij(t) (note that indices start at 0) 
-        for i in range(p): 
-            for j in range(p): 
-                E[i, j] = float((i + 1 - int(p / 2) * dt)**(j) / np.math.factorial(j))
+            # Create T_ij(t) (note that indices start at 0) 
+            for i in range(p): 
+                for j in range(p): 
+                    T[i, j] = float( ((i - y + 1) * dt)**j / np.math.factorial(j))
+            
+            # Compute E
+            E[:] = np.linalg.inv(T)
+            
+            # Embed
+            X[t - 1] = E @ x[k - 1]
 
-        # Compute T
-        T = np.linalg.inv(E)
-
-        # Compute the slices
-        slices = []
-        for t in times: 
-            start = t - int(p / 2)
-            end = start + p
-
-            if start < 0: 
-                X = np.concatenate((- start) * [x[0, None]] + [x[0:end]])
-            elif end > n_times:
-                X = np.concatenate([x[start:n_times]] + (end - n_times) * [x[-1, None]])
-            else: 
-                X = x[start:end]
-
-            X = T @ X 
-            slices.append(X)
-
-
-        slices = np.stack(slices, axis=0)
-
-        return slices
+        return X
 
 
     def run(self, 
@@ -401,7 +402,7 @@ class DEMInversion:
             # [re-]adjust for confounds
             # -------------------------
             if nb > 0: 
-                y     = y - qp.b * x # @ ? 
+                y     = y - qp.b @ x # @ ? 
 
             # [re-]set states & their derivatives
             # -----------------------------------
@@ -740,7 +741,7 @@ class DEMInversion:
         return results
 
     def generate(self, nT, u=None): 
-        # Adapted from spm_DEM_generate by Karl Friston
+        # Adapted from spm_DEM_int by Karl Friston
 
         n  = self.n                 # Derivative order
         M  = self.M
