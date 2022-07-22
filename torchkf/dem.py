@@ -111,9 +111,9 @@ class DEMInversion:
 
 
     def run(self, 
-            y   : np.ndarray,                     # Observed timeseries with shape (time, dimension) 
-            u   : Optional[np.ndarray] = None,    # Explanatory variables, inputs or prior expectation of causes
-            x   : Optional[np.ndarray] = None,    # Confounds
+            y   : np.ndarray,                       # Observed timeseries with shape (time, dimension) 
+            u   : Optional[np.ndarray] = None,      # Explanatory variables, inputs or prior expectation of causes
+            x   : Optional[np.ndarray] = None,      # Confounds
             nD  : int = 1,                          # Number of D-steps 
             nE  : int = 8,                          # Number of E-steps
             nM  : int = 8,                          # Number of M-steps 
@@ -124,7 +124,7 @@ class DEMInversion:
             Mmin: int = 0, 
             ):
         log = self.logger
-        # Adapted from spm_DEM (and other dependancies) by Karl Friston 
+        # Adapted from spm_DEM (and other dependencies) by Karl Friston 
         """ 
          Some notes:
             - E, dE are in order (y, v, x), outputs/causes come before states
@@ -181,7 +181,6 @@ class DEMInversion:
 
         # embedded series
         # ---------------
-        
         if y.shape[1] != ny: 
             raise ValueError(f'Last dimension of input y ({y.shape}) does not match that of deepest model cause ({M[0].l})')
 
@@ -351,7 +350,7 @@ class DEMInversion:
         Dv              = kron(           np.zeros((n, n)), np.eye(nv))
         Dv[:nv*d,:nv*d] = kron(np.diag(np.ones((d-1,)), 1), np.eye(nv))
         Dy              = kron(np.diag(np.ones((n-1,)), 1), np.eye(ny))
-        Dc              = kron(           np.zeros((n, n)), np.eye(nv))
+        Dc              = kron(           np.zeros((n, n)), np.eye(nc))
         Dc[:nc*d,:nc*d] = kron(np.diag(np.ones((d-1,)), 1), np.eye(nc))
         D               = block_diag(Dx, Dv, Dy, Dc)
 
@@ -501,7 +500,6 @@ class DEMInversion:
                     # conditional modes
                     # -----------------
                     u = np.concatenate([qu.x.reshape((-1,1)), qu.v.reshape((-1,1)), qu.y.reshape((-1,1)), qu.u.reshape((-1,1))])
-
                     # store gradient with precision as it appears a lot after
                     dEdu_iS = dE.du.T @ iS
 
