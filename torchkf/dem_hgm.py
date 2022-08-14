@@ -125,10 +125,22 @@ class HierarchicalGaussianModel(list):
                     raise ValueError(f'The size of constraints ({M[i].constraints.size} '
                         f'does not match that of parameter expectations ({M[i].p}).')
                 else: 
-                    M[i].pE[M[i].constraints == 'positive'] = np.log(1 + M[i].pE[M[i].constraints == 'positive'])
-                    M[i].pE[M[i].constraints == 'negative'] = np.log(1 - M[i].pE[M[i].constraints == 'negative'])
-                    M[i].pC[M[i].constraints == 'positive'] = np.log(1+M[i].pC[M[i].constraints == 'positive'])
-                    M[i].pC[M[i].constraints == 'negative'] = np.log(1+M[i].pC[M[i].constraints == 'negative'])
+                    M[i].cpos = M[i].constraints == 'positive'
+                    M[i].cneg = M[i].constraints == 'negative'
+                    M[i].csel = np.logical_or(M[i].cpos, M[i].cneg)
+
+                    # reparameterization as lognormal 
+                    M[i].cpE  = M[i].pE.copy()
+
+                    # pE parameter in mean in log (natural) space 
+                    M[i].cpE[M[i].cpos] = np.log(1e-16 + M[i].pE.squeeze()[M[i].cpos] / np.sqrt(1 + np.diag(M[i].pC[M[i].cpos]) / (M[i].pE.squeeze()[M[i].cpos])**2))
+                    M[i].cpE[M[i].cneg] = np.log(1e-16 - M[i].pE.squeeze()[M[i].cneg] / np.sqrt(1 + np.diag(M[i].pC[M[i].cneg]) / (M[i].pE.squeeze()[M[i].cneg])**2))
+                    
+                    M[i].cpC  = np.diag(M[i].pC).copy()
+                    M[i].cpC[M[i].csel] = np.log(1 + np.diag(M[i].pC)[M[i].csel] / (M[i].pE.squeeze()[M[i].csel])**2)
+
+                    M[i].pE[M[i].csel] = 0
+                    M[i].pC.flat[np.outer(M[i].csel, M[i].csel).reshape((-1,))] = 1
 
         # get inputs
         v = np.zeros((0,0)) if M[-1].v is None else M[-1].v
@@ -174,7 +186,7 @@ class HierarchicalGaussianModel(list):
                 M[i].g = compile_symb_func(M[i].gsymb, M[i].n, M[i].m, M[i].p, input_keys='xvp')
 
             # check function g(x, v, P)
-            if not callable(M[i].g): 
+            elif not callable(M[i].g): 
                 raise ValueError(f"Not callable function for model[{i}].g!")
 
             if M[i].m is not None and M[i].m != v.shape[0]:

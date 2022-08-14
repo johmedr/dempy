@@ -1,6 +1,8 @@
 import numpy as np 
 import scipy as sp
 import scipy.linalg
+import warnings
+
 from .dem_structs import *
 from .dem_hgm import *
 from .dem_dx import *
@@ -28,16 +30,14 @@ def dem_z(M: HierarchicalGaussianModel, N: int):
         # plus prior expectations
         try:
             for j in range(len(M[i].Q)):
-                P = P + M[i].Q[j]*exp(M[i].hE[j]);
+                P = P + M[i].Q[j]*np.exp(M[i].hE[j]);
         except Exception as e: 
-            print(e)
+            warnings.warn(f'cannot compute prior expectations on causes - got error: \n {e}')
 
         # create causes: assume i.i.d. if precision is zero
         if P.size > 0: 
             if np.linalg.norm(P, ord=1) == 0:
                 zi = np.random.randn(M[i].l, N) @ Kv
-            elif np.linalg.norm(P, ord=1) >= np.exp(16):
-                zi = np.zeros((M[i].l, N))
             else: 
                 zi = sp.linalg.sqrtm(np.linalg.inv(P)) @ np.random.randn(M[i].l, N) @ Kv
         else: 
@@ -50,17 +50,15 @@ def dem_z(M: HierarchicalGaussianModel, N: int):
         # plus prior expectations
         try:
             for j in range(len(M[i].R)):
-                P = P + M[i].R[j]*exp(M[i].gE[j]);
+                P = P + M[i].R[j]*np.exp(M[i].gE[j]);
         except Exception as e: 
-            print(e)
+            warnings.warn(f'cannot compute prior expectations on states - got error: \n {e}')
 
         # create states: assume i.i.d. if precision is zero
         if P.size > 0: 
             if np.linalg.norm(P, ord=1) == 0:
                 wi = np.random.randn(M[i].n, N) @ Kw * dt
-            elif np.linalg.norm(P, ord=1) >= np.exp(16):
-                wi = np.zeros((M[i].n, N))
-            else: 
+            else:
                 wi = sp.linalg.sqrtm(np.linalg.inv(P)) @ np.random.randn(M[i].n, N) @ Kw * dt
         else: 
             wi = np.zeros((M[i].n, N))

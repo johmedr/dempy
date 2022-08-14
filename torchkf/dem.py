@@ -565,7 +565,7 @@ class DEMInversion:
                 dS    = ECE + EE - S * nT 
 
                 # 1st order derivatives 
-                dPdh = [None] * nh
+                dPdh = [None for _ in range(nh)]
                 for i in range(nh): 
                     dPdh[i] = Q[i] * np.exp(qh.h[i])
                     dFdh[i] = - np.trace(dPdh[i] @ dS) / 2
@@ -632,10 +632,7 @@ class DEMInversion:
             # print(np.trace(iS[je][:, je] @ EE[je][:, je]))
             Li = Lu + Lp
             Ai = Lu + La 
-            # print('Fi: ', Fi)
 
-            log.info(f'Li: {Li}')
-            log.info(f'Ai: {Ai}')
             if Li == -np.inf: 
                 print('Lu: ', Lu)
                 print('... - np.trace(iS[je][:, je] @ EE[je][:, je]) / 2', (- np.trace(iS[je][:, je] @ EE[je][:, je]) / 2).item())
@@ -682,6 +679,15 @@ class DEMInversion:
                     npi += M[i].nP
                 qp.b    = dp[ib]
 
+                # log info
+                # --------
+                if iE > 1: 
+                    log.info(f'free energy increased!')
+                log.info(f'Fi: {Fi}')
+                log.info(f'dp: {dp}')
+                log.info(f'mh: {mh}')
+                log.info(f'te: {te}')
+                log.info(f'tm: {tm}')
             else:
                 
                 # otherwise, return to previous expansion point
@@ -693,20 +699,24 @@ class DEMInversion:
                 te      = min(te - 2, -2)
                 tm      = min(tm - 2, -2)
                 dp      = np.zeros_like(dp)
+
+                # log info
+                # --------
+                log.info(f'free energy did not increase!')
+                log.info(f'Fi: {Fi}')
+                log.info(f'dp: {dp}')
+                log.info(f'mh: {mh}')
+                log.info(f'te: {te}')
+                log.info(f'tm: {tm}')
                 
             
             F[iE]  = Fi;
             A[iE]  = Ai;
 
-            log.info(f'dp: {dp}')
-            log.info(f'mh: {mh}')
-
-            log.info(f'Li: {Li}')
-            log.info(f'Ai: {Ai}')
 
             # Check convergence 
-            if (np.linalg.norm(dp.reshape((-1,)), 1) <= tol * np.linalg.norm(np.concatenate(qp.p).reshape((-1,)), 1)\
-                 and np.linalg.norm(mh.reshape((-1,)), 1) <= tol) and iE > Emin: 
+            if (np.linalg.norm(dp.reshape((-1,)), 1) < tol * np.linalg.norm(np.concatenate(qp.p).reshape((-1,)), 1)\
+                 and np.linalg.norm(mh.reshape((-1,)), 1) < tol) and iE > Emin: 
                 break 
             if te < -8: 
                 break
@@ -727,10 +737,29 @@ class DEMInversion:
 
         results.qH = qH
         
-        qP.P       = Up @ qp.e + np.concatenate([m.pE for m in M])
-        qP.C       = Up @ qp.c[ip][:, ip] @ Up.T
+        qP.ucP     = Up @ qp.e + np.concatenate([m.pE for m in M])
+        qP.ucC     = Up @ qp.c[ip][:, ip] @ Up.T
         qP.dFdp    = Up @ dFdp[ip]
         qP.dFdpp   = Up @ dFdpp[ip][:, ip] @ Up.T
+
+        qP.P = qP.ucP.copy()
+        qP.V = np.diag(qP.ucC).copy() 
+        qP.M = qP.ucP.copy()
+        ip0  = 0
+        for i in range(nl-1): 
+            if M[i].constraints is not None:
+                ips = slice(ip0, ip0 + M[i].pE.size)
+
+                qP.P[ips][M[i].cpos]   =   np.exp(M[i].cpE[M[i].cpos] + np.sqrt(M[i].cpC[M[i].cpos]) * qP.P[ips][M[i].cpos])
+                qP.P[ips][M[i].cneg]   = - np.exp(M[i].cpE[M[i].cneg] + np.sqrt(M[i].cpC[M[i].cneg]) * qP.P[ips][M[i].cneg])
+
+                qP.V[ips][M[i].cpos] =   qP.P.squeeze()[ips][M[i].cpos] * np.exp(M[i].cpC[M[i].cpos] * qP.V[ips][M[i].cpos] / 2) * np.sqrt(np.exp(M[i].cpC[M[i].cpos] * qP.V[ips][M[i].cpos]) - 1)
+                qP.V[ips][M[i].cneg] = - qP.P.squeeze()[ips][M[i].cneg] * np.exp(M[i].cpC[M[i].cneg] * qP.V[ips][M[i].cneg] / 2) * np.sqrt(np.exp(M[i].cpC[M[i].cneg] * qP.V[ips][M[i].cneg]) - 1)
+
+            ip0 += M[i].pE.size
+
+
+        # u[M[i].csel, :] *= puq[M[i].csel] * np.sqrt(M[i].cpC[M[i].csel])[:, None]
 
         # remove constraints
         npi     = 0
@@ -895,11 +924,13 @@ class DEMInversion:
             
             vt   = u[:v.shape[0] * v.shape[1]].reshape(v.shape)
             xt   = u[ v.shape[0] * v.shape[1]:v.shape[0] * v.shape[1] + x.shape[0] * x.shape[1]].reshape(x.shape)
-            
+    
+        # end - tqdm(range(0, nT)) 
+
         results   = dotdict()
-        results.v = V
-        results.x = X
-        results.z = np.concatenate(Z, axis=2) 
-        results.w = np.concatenate(W, axis=2)
+        results.v = V.squeeze(-1)
+        results.x = X.squeeze(-1)
+        results.z = np.concatenate(Z, axis=2).squeeze(-1)
+        results.w = np.concatenate(W, axis=2).squeeze(-1)
 
         return results

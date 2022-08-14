@@ -32,6 +32,13 @@ def dem_eval_err_diff(n: int, d: int, M: HierarchicalGaussianModel, qu: dotdict,
     v = []
     nxi = 0
     nvi = 0
+
+
+    # Evaluate derivatives at each level
+    df  = list()
+    d2f = list()
+    dg  = list()
+    d2g = list()
     for i in range(nl - 1):
         xi  = qu.x[0, nxi:nxi + M[i].n]
         vi  = qu.v[0, nvi:nvi + M[i].m]
@@ -46,9 +53,12 @@ def dem_eval_err_diff(n: int, d: int, M: HierarchicalGaussianModel, qu: dotdict,
         puq = p + u @ q
 
         if M[i].constraints is not None:
-            puq = puq
-            puq[M[i].constraints == 'positive'] = np.maximum(0, np.exp(puq[M[i].constraints == 'positive']) - 1)
-            puq[M[i].constraints == 'negative'] = np.minimum(-np.exp(puq[M[i].constraints == 'negative']) + 1,0)
+            # evaluate at mode 
+            puq[M[i].cpos] =   np.exp(M[i].cpE[M[i].cpos] + np.sqrt(M[i].cpC[M[i].cpos]) * puq[M[i].cpos])
+            puq[M[i].cneg] = - np.exp(M[i].cpE[M[i].cneg] + np.sqrt(M[i].cpC[M[i].cneg]) * puq[M[i].cneg])
+
+            u[M[i].csel, :] *= puq[M[i].csel] * np.sqrt(M[i].cpC[M[i].csel])[:, None]
+         
 
         xvp = (xi, vi, puq)
         xvp = tuple(as_matrix_it(*xvp))
@@ -65,62 +75,39 @@ def dem_eval_err_diff(n: int, d: int, M: HierarchicalGaussianModel, qu: dotdict,
             raise RuntimeError(f"Error while evaluating model[{i}].g!")
         g.append(res)
 
-    f = np.concatenate(f).reshape((nx,))
-    g = np.concatenate(g).reshape((ne - nc,))
-
-    # Evaluate derivatives at each level
-    df  = list()
-    d2f = list()
-    dg  = list()
-    d2g = list()
-    for i in range(nl - 1): 
-        xi,vi,q,u,p = (_ if sum(_.shape) > 0 else np.empty(0) for _ in  (x[i], v[i], qp.p[i], qp.u[i], M[i].pE))
-        puq = p + u @ q
-
-        if M[i].constraints is not None:
-            puq = puq
-            puq[M[i].constraints == 'positive'] =  np.exp(puq[M[i].constraints == 'positive'])
-            puq[M[i].constraints == 'negative'] = -np.exp(puq[M[i].constraints == 'negative'])
-            cu  = puq * u 
-            puq[M[i].constraints == 'positive'] = np.maximum(0, puq[M[i].constraints == 'positive'] - 1)
-            puq[M[i].constraints == 'negative'] = np.minimum(puq[M[i].constraints == 'negative'] + 1,0)
-            # puq[M[i].constraints == 'positive'] -= 1
-            # puq[M[i].constraints == 'negative'] += 1
-        else: 
-            cu = u
-
-        xvp = (xi, vi, puq)
-        xvp = tuple(as_matrix_it(*xvp))
-
         dfi  = M[i].df(*xvp)
         d2fi = M[i].d2f(*xvp)
         dgi  = M[i].dg(*xvp)
         d2gi = M[i].d2g(*xvp) 
 
-        dfi.dp = dfi.dp @ cu
-        dgi.dp = dgi.dp @ cu
+        dfi.dp = dfi.dp @ u
+        dgi.dp = dgi.dp @ u
 
-        d2fi.dx.dp = d2fi.dx.dp @ cu
-        d2fi.dv.dp = d2fi.dv.dp @ cu
+        d2fi.dx.dp = d2fi.dx.dp @ u
+        d2fi.dv.dp = d2fi.dv.dp @ u
         d2fi.dv.dx = d2fi.dx.dv.swapaxes(1, 2)
         d2fi.dp.dx = d2fi.dx.dp.swapaxes(1, 2)
         d2fi.dp.dv = d2fi.dv.dp.swapaxes(1, 2)
 
-        d2fi.dp.dp = np.einsum('ik,aij,jl->akl', cu, d2fi.dp.dp, cu)
+        d2fi.dp.dp = np.einsum('ik,aij,jl->akl', u, d2fi.dp.dp, u)
 
-        d2gi.dx.dp = d2gi.dx.dp @ cu
-        d2gi.dv.dp = d2gi.dv.dp @ cu
+        d2gi.dx.dp = d2gi.dx.dp @ u
+        d2gi.dv.dp = d2gi.dv.dp @ u
         d2gi.dv.dx = d2gi.dx.dv.swapaxes(1, 2)
         d2gi.dp.dx = d2gi.dx.dp.swapaxes(1, 2)
         d2gi.dp.dv = d2gi.dv.dp.swapaxes(1, 2)
 
-        d2gi.dp.dp = np.einsum('ik,aij,jl->akl', cu, d2gi.dp.dp, cu)
+        d2gi.dp.dp = np.einsum('ik,aij,jl->akl', u, d2gi.dp.dp, u)
 
         dg.append(dgi)
         df.append(dfi)
 
         d2f.append(d2fi)
         d2g.append(d2gi)
+
+    # Stack f's  and g's
+    f = np.concatenate(f).reshape((nx,))
+    g = np.concatenate(g).reshape((ne - nc,))
 
     # Setup df
     df = dotdict({k: block_diag(*(dfi[k] for dfi in df)) for k in ['dx', 'dv', 'dp']}) 
