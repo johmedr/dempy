@@ -11,8 +11,8 @@ from .dem_dx import compute_sym_df_d2f, compile_symb_func
 class GaussianModel(dotdict): 
     def __init__(self, 
         f=None, g=None, fsymb=None, gsymb=None, m=None, n=None, l=None, p=None, x=None, v=None, 
-        pE=None, pC=None, hE=None, hC=None, gE=None, gC=None, 
-        Q=None, R=None, V=None, W=None, xP=None, vP=None, sv=None, sw=None, constraints=None): 
+        pE=None, pC=None, hE=None, hC=None, gE=None, gC=None, Q=None, R=None, V=None, W=None, xP=None, vP=None, sv=None, sw=None,
+         constraints=None, delays=None, delay_idxs=None): 
         self.f  : Callable         = f  # forward function (must be numpy compatible) - takes 3 vector arguments, return 1 vector of size n
         self.g  : Callable         = g  # observation function (must be numpy compatible) - takes 3 vector arguments, return 1 vector of size l
 
@@ -46,12 +46,14 @@ class GaussianModel(dotdict):
         self.sv : np.ndarray       = sv # smoothness (input noise)
         self.sw : np.ndarray       = sw # smoothness (state noise)
 
-        self.df      : dotdict     = None
-        self.d2f     : dotdict     = None
-        self.dg      : dotdict     = None
-        self.d2g     : dotdict     = None
+        self.df  :    cdotdict     = None
+        self.d2f :    cdotdict     = None
+        self.dg  :    cdotdict     = None
+        self.d2g :    cdotdict     = None
 
-        self.num_diff : bool       = False
+        # if not none, contains the function to compute the delay matrix or the delay matrix itself, which must broadcast to the system jacobian
+        self.delays                = delays 
+        self.delays_idxs           = delays_idxs
 
 class HierarchicalGaussianModel(list): 
     def __init__(self, *models: GaussianModel, dt=None, use_numerical_derivatives=False, n_jobs=1): 
@@ -207,46 +209,46 @@ class HierarchicalGaussianModel(list):
             M[i].v = v
             M[i].x = x
 
-            if not M[i].num_diff and not self._use_numerical_derivatives:
-                print('Compiling derivatives, it might take some time... ')
+            print('Compiling derivatives, it might take some time... ')
 
-                if M[i].df is None and M[i].d2f is None: 
-                    print('  Compiling f... ', end='')
-                    ffunc = M[i].fsymb if M[i].fsymb is not None else M[i].f
-                    try:
-                        start_time = time.time()
+            if M[i].df is None and M[i].d2f is None: 
+                print('  Compiling f... ', end='')
+                ffunc = M[i].fsymb if M[i].fsymb is not None else M[i].f
+                        
+                start_time = time.time()
+                try:
+                    if M[i].delays is None: 
                         M[i].df, M[i].d2f = compute_sym_df_d2f(ffunc, M[i].n, M[i].m, M[i].p, input_keys='xvp')
-                        print(f'f() ok. (compiled in {(time.time() - start_time):.2f}s)')
+                    else: 
+                        M[i].df, M[i].d2f = compute_sym_df_d2f_delays(ffunc, M[i].n, M[i].m, M[i].p, delays=M[i].delays, delays_idxs=M[i].delays_idxs, input_keys='xvp')
+                except Exception: 
+                    raise RuntimeError(f'Failed to obtain analytical derivatives for M[{i}].f.')
+                print(f'f() ok. (compiled in {(time.time() - start_time):.2f}s)')
 
-                    except Exception as e: 
-                        raise RuntimeError(f'Failed to obtain analytical derivatives for M[{i}].f.')
-                        raise e
-
-                elif M[i].df is not None and M[i].d2f is not None:
-                    pass
-                    # ... todo: check and stuff
-                else: raise ValueError('Either both of (or none of) df, d2f must be provided')
+            elif M[i].df is not None and M[i].d2f is not None:
+                pass
+                # ... todo: check and stuff
+            else: raise ValueError('Either both of (or none of) df, d2f must be provided')
 
 
-                # compute g-derivatives in the general case
-                if M[i].dg is None and M[i].d2g is None: 
-                    print('  Compiling g... ', end='')
-                    gfunc = M[i].gsymb if M[i].gsymb is not None else M[i].g
-                    try:
-                        start_time = time.time()
-                        M[i].dg, M[i].d2g = compute_sym_df_d2f(gfunc, M[i].n, M[i].m, M[i].p, input_keys='xvp')
-                        print(f'g() ok. (compiled in {(time.time() - start_time):.2f}s)')
+            # compute g-derivatives in the general case
+            if M[i].dg is None and M[i].d2g is None: 
+                print('  Compiling g... ', end='')
+                gfunc = M[i].gsymb if M[i].gsymb is not None else M[i].g
+                try:
+                    start_time = time.time()
+                    M[i].dg, M[i].d2g = compute_sym_df_d2f(gfunc, M[i].n, M[i].m, M[i].p, input_keys='xvp')
+                    print(f'g() ok. (compiled in {(time.time() - start_time):.2f}s)')
 
-                    except Exception: 
-                        raise RuntimeError(f'Failed to obtain analytical derivatives for M[{i}].g.')
+                except Exception: 
+                    raise RuntimeError(f'Failed to obtain analytical derivatives for M[{i}].g.')
 
-                elif M[i].dg is not None and M[i].d2g is not None:
-                    pass
-                    # ... todo: check and stuff
-                else: raise ValueError('Either both of (or none of) dg, d2g must be provided')
-                
+            elif M[i].dg is not None and M[i].d2g is not None:
+                pass
+                # ... todo: check and stuff
+            else: raise ValueError('Either both of (or none of) dg, d2g must be provided')
 
-                print('Done. ')
+            print('Done. ')
 
         # full priors on states
         for i in range(g): 

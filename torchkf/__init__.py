@@ -14,3 +14,4 @@ from .dem_dx        import compute_dx, compute_df_d2f, compute_sym_df_d2f
 from .dem_structs   import dotdict, cdotdict, block_matrix, cell
 from .dem_z         import dem_z 
 from .dem_viz       import Colorbar, plot_dem_states
+from .dem_symb      import *
