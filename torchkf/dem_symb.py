@@ -182,8 +182,7 @@ def compute_sym_df_d2f(func, *dims, input_keys=None, wrt=None, cse=True):
     return df, d2f
 
 
-
-def compute_sym_df_d2f_delays(func, *dims, delays=None, delay_idxs=None, input_keys=None, wrt=None, cse=True):
+def compute_sym_df_d2f_delays(func, *dims, delays=None, delays_idxs=None, input_keys=None, wrt=None, cse=True):
     """ 
     !!! for now we assume that dims == nx,nv,np, 
 
@@ -262,16 +261,14 @@ def compute_sym_df_d2f_delays(func, *dims, delays=None, delay_idxs=None, input_k
         is_fn_delay = True
 
         # unpack the delay parameters
-        delay_arg = var[2][1][delay_idxs]
+        delay_arg = var[2][1][delays_idxs]
         delay_arg = delay_arg.reshape(delay_arg.shape)
-
-        # create differentiation var
-        # delay_symvar = si.Matrix(delay_arg.tolist())
 
         # compute delay jacobian  
         T = delays(delay_arg)
         Q = (np.eye(*T.shape) - T * dfsymb['dx'])
         Q = si.Matrix(Q.tolist()).inv() # Q is 2d (nx, nx)
+
 
         dQdT    = [si.diff(Q, vi) for vi in delay_arg.flat]
         d2QdTdT = np.stack([
@@ -340,7 +337,7 @@ def compute_sym_df_d2f_delays(func, *dims, delays=None, delay_idxs=None, input_k
             H = ret.reshape((l, sym1.shape[0], sym2.shape[0]))
 
             # Apply delay in the general case, and replace nongeneral terms afterwise
-            
+
             # warning dot with more than 2d applies as x@y = sum_k(x[..., k] * y[..., k, :])
             # (nx, ni, nj) = ( (nx, nx) @ (nx, ni, nj).sw(0, 1) ).sw(0, 1)
             H = ( Q @ H.swapaxes(0, 1) ).swapaxes(0, 1)
@@ -350,15 +347,15 @@ def compute_sym_df_d2f_delays(func, *dims, delays=None, delay_idxs=None, input_k
                 if d2 == 'p' or j == 2: 
                     if d1 == 'p' or i == 2:
                         # H on between and nondelay components is dQdT @ J
-                        H[:, delay_idxs, :] = np.swapaxes(dQdT, 1, 2) @ dfsymb[d1]
-                        H[:, :, delay_idxs] = np.swapaxes(H[:, delay_idxs, :], 1, 2)
+                        H[:, delays_idxs, :] = np.swapaxes(dQdT, 1, 2) @ dfsymb[d1]
+                        H[:, :, delays_idxs] = np.swapaxes(H[:, delays_idxs, :], 1, 2)
 
                         # H on the delay components T is d2QdTdT
-                        H[:, delay_idxs][:, :, delay_idxs] = d2QdTdT
+                        H[:, delays_idxs][:, :, delays_idxs] = d2QdTdT
                     else: 
                         # H on between and nondelay components is dQdT @ J - use the fact that j >= i to compute 1 side only
                         # (nx, ni, nj) = ( (nx, nx, nj).sw(1, 2) @ (nx, ni) ).sw(1, 2)
-                        H[:, :, delay_idxs] = (np.swapaxes(dQdT, 1, 2) @ dfsymb[d1]).swapaxes(1, 2)
+                        H[:, :, delays_idxs] = (np.swapaxes(dQdT, 1, 2) @ dfsymb[d1]).swapaxes(1, 2)
 
             # make a SymEngine matrix
             H  = si.Matrix(H.reshape(l, sym1.shape[0]*sym2.shape[0]).tolist())
@@ -376,7 +373,7 @@ def compute_sym_df_d2f_delays(func, *dims, delays=None, delay_idxs=None, input_k
         # compute jacobian
         J = Q @ dfsymb[d1]
         if d1 == 'p' or i == 2: 
-            J[:, delay_idxs] = dQdT_fx
+            J[:, delays_idxs] = dQdT_fx
 
         J = si.Matrix(J.tolist())
         

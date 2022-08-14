@@ -5,14 +5,14 @@ import time
 from math import prod
 
 from .dem_structs import *
-from .dem_dx import compute_sym_df_d2f, compile_symb_func
+from .dem_dx import compute_sym_df_d2f, compile_symb_func, compute_sym_df_d2f_delays
 
 
 class GaussianModel(dotdict): 
     def __init__(self, 
         f=None, g=None, fsymb=None, gsymb=None, m=None, n=None, l=None, p=None, x=None, v=None, 
         pE=None, pC=None, hE=None, hC=None, gE=None, gC=None, Q=None, R=None, V=None, W=None, xP=None, vP=None, sv=None, sw=None,
-         constraints=None, delays=None, delay_idxs=None): 
+         constraints=None, delays=None, delays_idxs=None): 
         self.f  : Callable         = f  # forward function (must be numpy compatible) - takes 3 vector arguments, return 1 vector of size n
         self.g  : Callable         = g  # observation function (must be numpy compatible) - takes 3 vector arguments, return 1 vector of size l
 
