@@ -1,8 +1,7 @@
 import numpy as np
 from plotly.subplots import make_subplots
 import plotly.express as px
-import plotly.graph_objs as go
-
+import plotly.graph_objs as go    
 
 def Colorbar(mean=None, std=None, var=None, **kwargs):
     if var is not None: 
@@ -18,6 +17,42 @@ def Colorbar(mean=None, std=None, var=None, **kwargs):
         kwargs['line_width'] = 0
         
     return go.Scatter(x=x, y=std, fill='toself', mode='lines', **kwargs)
+
+def plot_dem_generate(hgm, gen, show=True):     
+    ix, iv = 0, 0
+    
+    figs = []
+    for i, m in enumerate(hgm):
+        xr = gen.x[:, 0, ix:ix+m.n]
+        vr = gen.v[:, 0, iv:iv+m.l]
+
+        
+        iv += m.l
+        ix += m.n   
+        
+        if i == len(hgm) - 1 and m.l == 0:
+            break
+        
+        fig = make_subplots(rows=1, cols=2)
+        
+        t = 'y' if i == 0 else ('u' if i == len(hgm) - 1 else 'v')
+
+        for j in range(vr.shape[1]):  
+            fig.add_scatter(y=vr[:, j], line_color=px.colors.qualitative.T10[j % len(px.colors.qualitative.T10)], name=f'{t}[{i},{j}]', 
+                                line_width=1, row=1, col=1)    
+            
+        for j in range(xr.shape[1]): 
+            fig.add_scatter(y=xr[:, j], line_color=px.colors.qualitative.T10[j % len(px.colors.qualitative.T10)], name=f'x[{i},{j}]', 
+                                line_width=1, row=1, col=2)    
+        fig.update_xaxes(mirror='allticks', ticks='outside', linewidth=1, linecolor='black')
+        fig.update_yaxes(mirror='allticks', ticks='outside', linewidth=1, linecolor='black')
+        fig.update_layout(template='plotly_white', height=500, width=900)
+        figs.append(fig)
+        
+        if show: 
+            fig.show()
+        
+    return figs
 
 
 def plot_dem_states(hgm, results, gen=None, overlay=None, show=True): 
@@ -68,8 +103,8 @@ def plot_dem_states(hgm, results, gen=None, overlay=None, show=True):
                                        opacity=0.3, showlegend=False), row=1, col=1)
             if gen is not None: 
                 fig.add_scatter(y=vr[:, j], line_color=px.colors.qualitative.T10[j], showlegend=False, 
-                                line_dash='dash', row=1, col=1)    
-            fig.add_scatter(y=v[:, j], line_color=px.colors.qualitative.T10[j], name=f'{t}[{i},{j}]', row=1, col=1)
+                                line_dash='dash', line_width=1, row=1, col=1)    
+            fig.add_scatter(y=v[:, j], line_color=px.colors.qualitative.T10[j], name=f'{t}[{i},{j}]', line_width=1, row=1, col=1)
             
         for j in range(x.shape[1]): 
             if i < len(hgm) - 1:
@@ -77,8 +112,8 @@ def plot_dem_states(hgm, results, gen=None, overlay=None, show=True):
                                        opacity=0.3, showlegend=False), row=1, col=2)
             if gen is not None: 
                 fig.add_scatter(y=xr[:, j], line_color=px.colors.qualitative.T10[j], showlegend=False, 
-                                line_dash='dash', row=1, col=2)    
-            fig.add_scatter(y=x[:, j], line_color=px.colors.qualitative.T10[j], name=f'x[{i},{j}]', row=1, col=2)
+                                line_dash='dash', line_width=1, row=1, col=2)    
+            fig.add_scatter(y=x[:, j], line_color=px.colors.qualitative.T10[j], name=f'x[{i},{j}]', line_width=1, row=1, col=2)
         fig.update_xaxes(mirror='allticks', ticks='outside', linewidth=1, linecolor='black')
         fig.update_yaxes(mirror='allticks', ticks='outside', linewidth=1, linecolor='black')
         fig.update_layout(template='plotly_white', height=500, width=900)
