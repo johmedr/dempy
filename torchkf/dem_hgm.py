@@ -5,7 +5,7 @@ import time
 from math import prod
 
 from .dem_structs import *
-from .dem_dx import compute_sym_df_d2f, compile_symb_func, compute_sym_df_d2f_delays
+from .dem_dx import compute_sym_df_d2f, compile_symb_func, compute_sym_df_d2f_delays, compile_symb_func_delays
 
 
 class GaussianModel(dotdict): 
@@ -166,7 +166,10 @@ class HierarchicalGaussianModel(list):
                 raise ValueError(f"Got bot 'f' and 'fsymb' functions for model[{i}]!")
 
             if callable(M[i].fsymb):
-                M[i].f = compile_symb_func(M[i].fsymb, M[i].n, M[i].m, M[i].p, input_keys='xvp')
+                if M[i].delays is None:
+                    M[i].f = compile_symb_func(M[i].fsymb, M[i].n, M[i].m, M[i].p, input_keys='xvp')
+                else:
+                    M[i].f = compile_symb_func_delays(M[i].fsymb, M[i].n, M[i].m, M[i].p, delays=M[i].delays, delays_idxs=M[i].delays_idxs, input_keys='xvp')
 
             # check function f(x, v, P)
             elif not callable(M[i].f): 

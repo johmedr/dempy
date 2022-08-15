@@ -17,12 +17,14 @@ def dem_z(M: HierarchicalGaussianModel, N: int):
     w  = []
 
     for i in range(nl): 
-        # temporal correlation matrix with unit variance
-        Kv = sp.linalg.toeplitz(np.exp(-t**2 / (2 * M[i].sv**2)))
-        Kv = Kv @ np.diag(1. / np.sqrt( np.diag(Kv @ Kv.T) ))
+        if M[i].sv > np.exp(-16):
+            # temporal correlation matrix with unit variance
+            Kv = sp.linalg.toeplitz(np.exp(-t**2 / (2 * M[i].sv**2)))
+            Kv = Kv @ np.diag(1. / np.sqrt( np.diag(Kv @ Kv.T) ))
 
-        Kw = sp.linalg.toeplitz(np.exp(-t**2 / (2 * M[i].sw**2)))
-        Kw = Kw @ np.diag(1. / np.sqrt( np.diag(Kw @ Kw.T) ))
+        if M[i].sw > np.exp(-16):
+            Kw = sp.linalg.toeplitz(np.exp(-t**2 / (2 * M[i].sw**2)))
+            Kw = Kw @ np.diag(1. / np.sqrt( np.diag(Kw @ Kw.T) ))
 
         # prior expectation on causes
         P  = M[i].V
@@ -37,9 +39,15 @@ def dem_z(M: HierarchicalGaussianModel, N: int):
         # create causes: assume i.i.d. if precision is zero
         if P.size > 0: 
             if np.linalg.norm(P, ord=1) == 0:
-                zi = np.random.randn(M[i].l, N) @ Kv
+                if M[i].sv > np.exp(-16):
+                    zi = np.random.randn(M[i].l, N) @ Kv
+                else: 
+                    zi = np.random.randn(M[i].l, N)
             else: 
-                zi = sp.linalg.sqrtm(np.linalg.inv(P)) @ np.random.randn(M[i].l, N) @ Kv
+                if M[i].sv > np.exp(-16):
+                    zi = sp.linalg.sqrtm(np.linalg.inv(P)) @ np.random.randn(M[i].l, N) @ Kv
+                else: 
+                    zi = sp.linalg.sqrtm(np.linalg.inv(P)) @ np.random.randn(M[i].l, N)
         else: 
             zi = np.zeros((M[i].l, N))
         z.append(zi.T)
@@ -57,9 +65,16 @@ def dem_z(M: HierarchicalGaussianModel, N: int):
         # create states: assume i.i.d. if precision is zero
         if P.size > 0: 
             if np.linalg.norm(P, ord=1) == 0:
-                wi = np.random.randn(M[i].n, N) @ Kw * dt
+                if M[i].sw > np.exp(-16):
+                    wi = np.random.randn(M[i].n, N) @ Kw #* dt
+                else: 
+                    wi = np.random.randn(M[i].n, N) 
             else:
-                wi = sp.linalg.sqrtm(np.linalg.inv(P)) @ np.random.randn(M[i].n, N) @ Kw * dt
+                if M[i].sw > np.exp(-16):
+                    wi = sp.linalg.sqrtm(np.linalg.inv(P)) @ np.random.randn(M[i].n, N) @ Kw #* dt
+                else: 
+                    wi = sp.linalg.sqrtm(np.linalg.inv(P)) @ np.random.randn(M[i].n, N) #* dt
+
         else: 
             wi = np.zeros((M[i].n, N))
 

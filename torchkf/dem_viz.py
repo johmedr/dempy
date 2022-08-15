@@ -18,7 +18,7 @@ def Colorbar(mean=None, std=None, var=None, **kwargs):
         
     return go.Scatter(x=x, y=std, fill='toself', mode='lines', **kwargs)
 
-def plot_dem_generate(hgm, gen, show=True):     
+def plot_dem_generate(hgm, gen, time=None, show=True):     
     ix, iv = 0, 0
     
     figs = []
@@ -35,15 +35,21 @@ def plot_dem_generate(hgm, gen, show=True):
         
         fig = make_subplots(rows=1, cols=2)
         
-        t = 'y' if i == 0 else ('u' if i == len(hgm) - 1 else 'v')
+        if i == 0:
+            t = 'y'
+        elif i == len(hgm) - 1:
+            t = 'u'
+        else: 
+            t = 'v'
 
         for j in range(vr.shape[1]):  
-            fig.add_scatter(y=vr[:, j], line_color=px.colors.qualitative.T10[j % len(px.colors.qualitative.T10)], name=f'{t}[{i},{j}]', 
+            fig.add_scatter(x=time, y=vr[:, j], line_color=px.colors.qualitative.T10[j % len(px.colors.qualitative.T10)], name=f'{t}[{i},{j}]', 
                                 line_width=1, row=1, col=1)    
             
         for j in range(xr.shape[1]): 
-            fig.add_scatter(y=xr[:, j], line_color=px.colors.qualitative.T10[j % len(px.colors.qualitative.T10)], name=f'x[{i},{j}]', 
-                                line_width=1, row=1, col=2)    
+            fig.add_scatter(x=time, y=xr[:, j], line_color=px.colors.qualitative.T10[j % len(px.colors.qualitative.T10)], name=f'x[{i},{j}]', 
+                                line_width=1, row=1, col=2)
+
         fig.update_xaxes(mirror='allticks', ticks='outside', linewidth=1, linecolor='black')
         fig.update_yaxes(mirror='allticks', ticks='outside', linewidth=1, linecolor='black')
         fig.update_layout(template='plotly_white', height=500, width=900)

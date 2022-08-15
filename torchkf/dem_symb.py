@@ -41,7 +41,58 @@ def compile_symb_func(func, *dims, input_keys=None):
 
     unpackvars = [*chain(*map(lambda v: v[1].flat, symvars))]
 
-    func = wrap_xvp(si.lambdify(unpackvars, symret, cse=True))
+    func = wrap_xvp(si.lambdify(unpackvars, symret, backend='llvm', cse=True))
+    func = lambda x, v, p, _shape=(symret.shape[0], 1), _func=func: _func(x,v,p).reshape(_shape)
+
+    return func
+
+def compile_symb_func_delays(func, *dims, delays=None, delays_idxs=None, input_keys=None):
+    if input_keys is None: 
+        import string
+        input_keys = string.ascii_lowercase[:len(dims)]
+    else: 
+        assert(len(dims) == len(input_keys))
+
+    dims = [(dim,1) if isinstance(dim, int) else dim for dim in dims]
+    flatdims = [math.prod(dim) for dim in dims]
+
+    # create symbolic variables
+    symvars = [
+        (f'd{k}', si.symarray(k, dim))
+        for k, dim in zip(input_keys, flatdims)
+    ]
+
+    # symbols in column numpy arrays
+    var = [
+        (k, symvar.reshape((-1, 1)))
+        for k, symvar in symvars
+    ]    
+    
+    args = [v[1] for v in var]
+    
+    f_sym = func(*args)
+
+    f_sym = si.Matrix(f_sym.tolist())
+    J = f_sym.jacobian(si.Matrix(args[0].tolist()))
+
+    if callable(delays):
+        # unpack the delay parameters
+        delay_arg = var[2][1][delays_idxs]
+        delay_arg = delay_arg.reshape(delay_arg.shape)
+
+        # compute delay jacobian  
+        T = delays(delay_arg)
+    else: 
+        T = delays
+
+    Q = (np.eye(*T.shape) + T * J)
+    Q = si.Matrix(Q.tolist()).inv() # Q is 2d (nx, nx)
+    
+    symret = Q @ f_sym
+
+    unpackvars = [*chain(*map(lambda v: v[1].flat, symvars))]
+
+    func = wrap_xvp(si.lambdify(unpackvars, symret, backend='llvm', cse=True))
     func = lambda x, v, p, _shape=(symret.shape[0], 1), _func=func: _func(x,v,p).reshape(_shape)
 
     return func
@@ -162,7 +213,7 @@ def compute_sym_df_d2f(func, *dims, input_keys=None, wrt=None, cse=True):
 
             # create a function if h has free (dependent) symbols
             if len(h.free_symbols) > 0: 
-                func_h  = wrap_xvp(si.lambdify(unpackvars, h, cse=cse))
+                func_h  = wrap_xvp(si.lambdify(unpackvars, h, backend='llvm', cse=cse))
 
                 d2f[d1][d2] = lambda *_args, _func=func_h, _target_shape=(l, *squeezedims[i], *squeezedims[j]):\
                     _func(*_args).reshape(_target_shape)
@@ -173,7 +224,7 @@ def compute_sym_df_d2f(func, *dims, input_keys=None, wrt=None, cse=True):
         # create a jacobian if J has free (dependent) symbols
         J = dfsymb[d1]
         if len(J.free_symbols) > 0:
-            func_J  = wrap_xvp(si.lambdify(unpackvars, J, cse=cse))
+            func_J  = wrap_xvp(si.lambdify(unpackvars, J, backend='llvm', cse=cse))
 
             df[d1] = lambda *_args, _func=func_J, _target_shape=(l, *squeezedims[i]): _func(*_args).reshape(_target_shape)
         else: 
@@ -266,7 +317,7 @@ def compute_sym_df_d2f_delays(func, *dims, delays=None, delays_idxs=None, input_
 
         # compute delay jacobian  
         T = delays(delay_arg)
-        Q = (np.eye(*T.shape) - T * dfsymb['dx'])
+        Q = (np.eye(*T.shape) + T * dfsymb['dx'])
         Q = si.Matrix(Q.tolist()).inv() # Q is 2d (nx, nx)
 
 
@@ -289,8 +340,9 @@ def compute_sym_df_d2f_delays(func, *dims, delays=None, delays_idxs=None, input_
         is_fn_delay = False
 
         T = delays
-        Q = (np.eye(*T.shape) - T * dfsymb['dx'])
+        Q = (np.eye(*T.shape) + T * dfsymb['dx'])
         Q = si.Matrix(Q.tolist()).inv()
+        Q = np.asarray(Q)
 
     # callable dotdicts for output 
     df  = cdotdict()
@@ -362,7 +414,7 @@ def compute_sym_df_d2f_delays(func, *dims, delays=None, delays_idxs=None, input_
 
             # create a function if h has free (dependent) symbols
             if len(H.free_symbols) > 0: 
-                func_h  = wrap_xvp(si.lambdify(unpackvars, H, cse=cse))
+                func_h  = wrap_xvp(si.lambdify(unpackvars, H, backend='llvm', cse=cse))
 
                 d2f[d1][d2] = lambda *_args, _func=func_h, _target_shape=(l, *squeezedims[i], *squeezedims[j]):\
                     _func(*_args).reshape(_target_shape)
@@ -372,14 +424,15 @@ def compute_sym_df_d2f_delays(func, *dims, delays=None, delays_idxs=None, input_
         
         # compute jacobian
         J = Q @ dfsymb[d1]
-        if d1 == 'p' or i == 2: 
-            J[:, delays_idxs] = dQdT_fx
+        if is_fn_delay:
+            if d1 == 'p' or i == 2: 
+                J[:, delays_idxs] = dQdT_fx
 
         J = si.Matrix(J.tolist())
         
         # create a function if J has free (dependent) symbols
         if len(J.free_symbols) > 0:
-            func_J  = wrap_xvp(si.lambdify(unpackvars, J, cse=cse))
+            func_J  = wrap_xvp(si.lambdify(unpackvars, J, backend='llvm', cse=cse))
 
             df[d1] = lambda *_args, _func=func_J, _target_shape=(l, *squeezedims[i]): _func(*_args).reshape(_target_shape)
         else: 
