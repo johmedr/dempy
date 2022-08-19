@@ -1,2 +1,2 @@
-# torchkf
-Inversion of hierarchical dynamical models with torch
+# dempy
+An implementation of the Dynamic Expectation Maximization algorithm based on SPM. 

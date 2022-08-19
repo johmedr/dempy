@@ -4,21 +4,19 @@ from setuptools import find_packages, setup
 #     long_description = fh.read()
 
 setup(
-    name='torchkf',
-    version='0.0.1',
+    name='dempy',
+    version='0.1.0',
     author='Johan Medrano',
     python_requires='>=3.4',
     author_email='',
     description='',
-    # long_description=long_description,
     platforms='Linux',
     packages=find_packages(),
-    #package_dir={
-    #    '': 'pykeos'
-    #},
-    # include_package_data=True,
     install_requires=(
-        # 'nolds',/
+        "numpy", 
+        "scipy", 
+        "symengine",
+        "tqdm",
         "plotly",
         'plotly_express'
     ),

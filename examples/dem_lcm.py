@@ -1,5 +1,5 @@
 import numpy as np
-from torchkf import *
+from dempy import *
 
 theta1 = np.array([[0.125,  0.1633], 
                        [0.125,  0.0676], 

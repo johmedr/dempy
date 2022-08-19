@@ -1,4 +1,4 @@
-from torchkf import *
+from dempy import *
 import numpy as np
 
 pE = np.array([18., 18., 46.92, 2., 1., 2., 4., 1., 1., 1.])
