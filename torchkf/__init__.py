@@ -15,3 +15,5 @@ from .dem_structs   import dotdict, cdotdict, block_matrix, cell
 from .dem_z         import dem_z 
 from .dem_viz       import Colorbar, plot_dem_states, plot_dem_generate
 from .dem_symb      import *
+
+from .special_matrices import *

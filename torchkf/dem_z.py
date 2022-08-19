@@ -6,6 +6,7 @@ import warnings
 from .dem_structs import *
 from .dem_hgm import *
 from .dem_dx import *
+from .special_matrices import toeplitz
 
 def dem_z(M: HierarchicalGaussianModel, N: int): 
     """ Generates states noise w and causes noise z """
@@ -19,11 +20,11 @@ def dem_z(M: HierarchicalGaussianModel, N: int):
     for i in range(nl): 
         if M[i].sv > np.exp(-16):
             # temporal correlation matrix with unit variance
-            Kv = sp.linalg.toeplitz(np.exp(-t**2 / (2 * M[i].sv**2)))
+            Kv = toeplitz(np.exp(-t**2 / (2 * M[i].sv**2)))
             Kv = Kv @ np.diag(1. / np.sqrt( np.diag(Kv @ Kv.T) ))
 
         if M[i].sw > np.exp(-16):
-            Kw = sp.linalg.toeplitz(np.exp(-t**2 / (2 * M[i].sw**2)))
+            Kw = toeplitz(np.exp(-t**2 / (2 * M[i].sw**2)))
             Kw = Kw @ np.diag(1. / np.sqrt( np.diag(Kw @ Kw.T) ))
 
         # prior expectation on causes

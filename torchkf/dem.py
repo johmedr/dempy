@@ -328,7 +328,12 @@ class DEMInversion:
 
         # initialize dedb
         # ---------------
-        # NotImplemented
+        # dedbi = block_diag(*[np.zeros((M[i].l, nn)) for i in range(nl)])
+        # dndbi = block_diag(*[np.zeros((M[i].n, nn)) for i in range(nl - 1)])
+        # dEdb  = np.stack([dedbi for _ in range(n)], 0)
+        # dNdb  = np.stack([dndbi for _ in range(n)], 0)
+        # dEdb  = np.concatenate([dEdb, dNdb], 0)
+
 
         # initialize arrays for D-step
         # ============================
