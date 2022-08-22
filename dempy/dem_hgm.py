@@ -114,7 +114,7 @@ class HierarchicalGaussianModel(list):
         M = list(models)
 
         # order 
-        g   = len(M)
+        g  = len(M)
 
         # check supra-ordinate level and add one (with flat priors) if necessary
         if callable(M[-1].g) or callable(M[-1].gsymb): 
@@ -190,21 +190,33 @@ class HierarchicalGaussianModel(list):
                     M[i].pC.flat[np.outer(M[i].csel, M[i].csel).reshape((-1,))] = 1
 
         # get inputs
-        v = np.zeros((0,0)) if M[-1].v is None else M[-1].v
+        v = np.zeros((0,0)) if M[-1].v is None else M[-1].v.reshape(-1, 1)
         if prod(v.shape) == 0:
             if M[-2].m is not None: 
                 v = np.zeros((M[-2].m, 1))
+
             elif M[-1].l is not None: 
                 v = np.zeros((M[-1].l, 1))
+
+
         M[-1].l  = v.shape[0]
         M[-1].v  = v
 
         # check functions
         for i in reversed(range(g - 1)):
-            x = np.zeros((M[i].n, 1)) if M[i].x is None else M[i].x
+
+            # prepare states
+            x = np.zeros((M[i].n, 1)) if M[i].x is None else M[i].x.reshape(-1, 1)
 
             if prod(x.shape) == 0 and M[i].n > 0:
                 x = np.zeros((M[i].n, 1))
+
+            # prepare input dims
+            if M[i].m is not None and M[i].m != v.shape[0]:
+                warnings.warn(f'Declared input shape of model {i} ({M[i].m}) '
+                    f'does not match output shape of model[{i+1}].g ({v.shape[0]})!')
+
+            M[i].m = v.shape[0]
             
             # check f function
             if callable(M[i].f) and callable(M[i].fsymb): 
@@ -239,10 +251,6 @@ class HierarchicalGaussianModel(list):
             elif not callable(M[i].g): 
                 raise ValueError(f"Not callable function for model[{i}].g!")
 
-            if M[i].m is not None and M[i].m != v.shape[0]:
-                warnings.warn(f'Declared input shape of model {i} ({M[i].m}) '
-                    f'does not match output shape of model[{i+1}].g ({v.shape[0]})!')
-            M[i].m = v.shape[0]
             try: 
                 v = M[i].g(x, v, M[i].pE)
             except: 
@@ -347,6 +355,7 @@ class HierarchicalGaussianModel(list):
                 M[i].hC = np.eye(len(M[i].hE)) / pP 
             else:
                 try:
+                    M[i].hC = np.array(M[i].hC).reshape((-1,1))
                     M[i].hC * M[i].hE
                 except: 
                     warnings.warn(f'Failed to compute M[{i}].hC * M[{i}].hE. Setting M[{i}].hC to identity.')
@@ -356,6 +365,7 @@ class HierarchicalGaussianModel(list):
                 M[i].gC = np.eye(len(M[i].gE)) / pP 
             else: 
                 try:
+                    M[i].gC = np.array(M[i].gC).reshape((-1,1))
                     M[i].gC * M[i].gE
                 except: 
                     warnings.warn(f'Failed to compute M[{i}].gC * M[{i}].hE. Setting M[{i}].gC to identity.')
@@ -370,7 +380,9 @@ class HierarchicalGaussianModel(list):
                 M[i].Q  = [np.eye(M[i].l)]
                 M[i].hE = M[i].hE[0].reshape((1,1))
 
-            if (M[i].hE.size) > (M[i].hC.size): 
+            if M[i].hE.size == M[i].hC.size: 
+                M[i].hC = np.diag(M[i].hC.flat)
+            elif (M[i].hE.size) > (M[i].hC.size): 
                 M[i].hC = np.eye(len(M[i].Q)) * M[i].hC[0]
             
             if len(M[i].R) > (M[i].gE.size): 
@@ -379,7 +391,9 @@ class HierarchicalGaussianModel(list):
                 M[i].R = [np.eye(M[i].n)]
                 M[i].gE = M[i].gE[0].reshape((1,1))
             
-            if (M[i].gE.size) > (M[i].gC.size): 
+            if M[i].gE.size == M[i].gC.size: 
+                M[i].gC = np.diag(M[i].gC.flat)
+            elif (M[i].gE.size) > (M[i].gC.size): 
                 M[i].gC = np.eye(len(M[i].R)) * M[i].gC[0]
 
             # check consistency and sizes (Q)

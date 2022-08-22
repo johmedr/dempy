@@ -21,11 +21,13 @@ def dem_z(M: HierarchicalGaussianModel, N: int):
         if M[i].sv > np.exp(-16):
             # temporal correlation matrix with unit variance
             Kv = toeplitz(np.exp(-t**2 / (2 * M[i].sv**2)))
-            Kv = Kv @ np.diag(1. / np.sqrt( np.diag(Kv @ Kv.T) ))
+            Dv = 1. / np.sqrt(np.einsum('ij,ij->i', Kv, Kv))
+            Kv = np.einsum('ij,i->ij', Kv, Dv)
 
         if M[i].sw > np.exp(-16):
             Kw = toeplitz(np.exp(-t**2 / (2 * M[i].sw**2)))
-            Kw = Kw @ np.diag(1. / np.sqrt( np.diag(Kw @ Kw.T) ))
+            Dw = 1. / np.sqrt(np.einsum('ij,ij->i', Kw, Kw))
+            Kw = np.einsum('ij,i->ij', Kw, Dw)
 
         # prior expectation on causes
         P  = M[i].V

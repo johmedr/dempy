@@ -21,6 +21,8 @@ def compile_symb_func(func, *dims, input_keys=None):
     else: 
         assert(len(dims) == len(input_keys))
 
+    dims = tuple(0 if dim is None else dim for dim in dims)
+
     dims = [(dim,1) if isinstance(dim, int) else dim for dim in dims]
     flatdims = [prod(dim) for dim in dims]
 
@@ -52,6 +54,8 @@ def compile_symb_func_delays(func, *dims, delays=None, delays_idxs=None, input_k
         input_keys = string.ascii_lowercase[:len(dims)]
     else: 
         assert(len(dims) == len(input_keys))
+    
+    dims = tuple(0 if dim is None else dim for dim in dims)
 
     dims = [(dim,1) if isinstance(dim, int) else dim for dim in dims]
     flatdims = [prod(dim) for dim in dims]
@@ -118,6 +122,8 @@ def compute_sym_df_d2f(func, *dims, input_keys=None, wrt=None):
     else: 
         assert(len(dims) == len(input_keys))
     
+    dims = tuple(0 if dim is None else dim for dim in dims)
+
     if wrt is None:
         wrt = input_keys
     else: 
@@ -256,6 +262,8 @@ def compute_sym_df_d2f_delays(func, *dims, delays=None, delays_idxs=None, input_
         input_keys = string.ascii_lowercase[:len(dims)]
     else: 
         assert(len(dims) == len(input_keys))
+
+    dims = tuple(0 if dim is None else dim for dim in dims)
     
     if wrt is None:
         wrt = input_keys
