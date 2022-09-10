@@ -1,2 +1,2 @@
 # dempy
-An implementation of the Dynamic Expectation Maximization algorithm based on SPM. 
+An implementation of the Dynamic Expectation Maximization algorithm based on the SPM implementation. 
