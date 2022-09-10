@@ -19,7 +19,7 @@ def Colorbar(mean=None, std=None, var=None, **kwargs):
         
     return go.Scatter(x=x, y=std, fill='toself', mode='lines', **kwargs)
 
-def plot_dem_generate(hgm, gen, time=None, show=True, tmin=0, tmax=None):     
+def plot_dem_generate(hgm, gen, time=None, show=True, tmin=0, tmax=None, names=None, subplots=True):     
     ix, iv = 0, 0
 
     if time is not None:
@@ -29,6 +29,9 @@ def plot_dem_generate(hgm, gen, time=None, show=True, tmin=0, tmax=None):
         time = time[tmin:tmax]
 
     tslice = slice(tmin, tmax)
+
+    if names is None: 
+        names = dict()
 
     figs = []
     for i, m in enumerate(hgm):
@@ -41,9 +44,7 @@ def plot_dem_generate(hgm, gen, time=None, show=True, tmin=0, tmax=None):
         
         if i == len(hgm) - 1 and m.l == 0:
             break
-        
-        fig = make_subplots(rows=1, cols=2)
-        
+
         if i == 0:
             t = 'y'
         elif i == len(hgm) - 1:
@@ -51,18 +52,52 @@ def plot_dem_generate(hgm, gen, time=None, show=True, tmin=0, tmax=None):
         else: 
             t = 'v'
 
+        if subplots: 
+            fig = make_subplots(rows=1, cols=2)
+            kw = dict(row=1, col=1) 
+        else: 
+            fig = go.Figure()
+            kw = dict()
+            _figs = [fig]
+
         for j in range(vr.shape[1]):  
-            fig.add_scatter(x=time, y=vr[:, j], line_color=px.colors.qualitative.T10[j % len(px.colors.qualitative.T10)], name=f'{t}[{i},{j}]', 
-                                line_width=1, row=1, col=1)    
+            color = px.colors.qualitative.T10[j % len(px.colors.qualitative.T10)]
+            name  = names.pop(f'{t}[{i},{j}]',f'{t}[{i},{j}]') 
+
+            fig.add_scatter(x=time, y=vr[:, j], line_color=color, name=name, 
+                                line_width=1, **kw)    
+
+
+        fig.update_xaxes(mirror='allticks', ticks='outside', linewidth=1, linecolor='black', **kw)
+        fig.update_yaxes(mirror='allticks', ticks='outside', linewidth=1, linecolor='black', **kw)
+        fig.update_layout(template='plotly_white', height=500, width=900)
+
+        if subplots: 
+            kw = dict(row=1, col=2) 
+        else: 
+            if show: 
+                fig.show()
+            
+            fig = go.Figure()
+            kw = dict()
             
         for j in range(xr.shape[1]): 
-            fig.add_scatter(x=time, y=xr[:, j], line_color=px.colors.qualitative.T10[j % len(px.colors.qualitative.T10)], name=f'x[{i},{j}]', 
-                                line_width=1, row=1, col=2)
+            color = px.colors.qualitative.T10[j % len(px.colors.qualitative.T10)]
+            name  = names.pop(f'x[{i},{j}]',f'x[{i},{j}]') 
+            
+            fig.add_scatter(x=time, y=xr[:, j], line_color=color, name=name, 
+                                line_width=1, **kw)
 
-        fig.update_xaxes(mirror='allticks', ticks='outside', linewidth=1, linecolor='black')
-        fig.update_yaxes(mirror='allticks', ticks='outside', linewidth=1, linecolor='black')
+        fig.update_xaxes(mirror='allticks', ticks='outside', linewidth=1, linecolor='black', **kw)
+        fig.update_yaxes(mirror='allticks', ticks='outside', linewidth=1, linecolor='black', **kw)
         fig.update_layout(template='plotly_white', height=500, width=900)
-        figs.append(fig)
+
+        if subplots:
+            figs.append(fig)
+        else: 
+            _figs.append(fig)
+            figs.append(_figs)
+
         
         if show: 
             fig.show()
@@ -70,7 +105,7 @@ def plot_dem_generate(hgm, gen, time=None, show=True, tmin=0, tmax=None):
     return figs
 
 
-def plot_dem_states(hgm, results, gen=None, time=None, tmin=0, tmax=None, overlay=None, show=True): 
+def plot_dem_states(hgm, results, gen=None, time=None, tmin=0, tmax=None, overlay=None, show=True, names=None, subplots=True): 
 
     if time is not None:
         tmin = np.argmin(np.abs(time - tmin)).astype('i')
@@ -79,6 +114,9 @@ def plot_dem_states(hgm, results, gen=None, time=None, tmin=0, tmax=None, overla
         time = time[tmin:tmax]
 
     tslice = slice(tmin, tmax)
+    
+    if names is None:
+        names = dict()
 
     qU = results.qU
     try:
@@ -119,33 +157,64 @@ def plot_dem_states(hgm, results, gen=None, time=None, tmin=0, tmax=None, overla
         
         if i == len(hgm) - 1 and m.l == 0:
         	break
-        fig = make_subplots(rows=1, cols=2)
+
+        if subplots: 
+            fig = make_subplots(rows=1, cols=2)
+            kw = dict(row=1, col=1) 
+        else: 
+            fig = go.Figure()
+            kw = dict()
+
+            _figs = [fig]
         
         for j in range(v.shape[1]):  
             color = px.colors.qualitative.T10[j % len(px.colors.qualitative.T10)]
+            name = names.pop(f'{t}[{i},{j}]', f'{t}[{i},{j}]')
+
             if i > 0:
                 fig.add_trace(Colorbar(mean=v[tslice, j], var=Cv[tslice, j, j], fillcolor=color, legendgroup=f'{t}[{i},{j}]', 
-                                       opacity=0.3, showlegend=False), row=1, col=1)
+                                       opacity=0.3, showlegend=False), **kw)
             if gen is not None: 
                 fig.add_scatter(y=vr[tslice, j], line_color=color, showlegend=False, legendgroup=f'{t}[{i},{j}]', 
-                                line_dash='dash', line_width=1, row=1, col=1)    
-            fig.add_scatter(y=v[tslice, j], line_color=color, name=f'{t}[{i},{j}]', legendgroup=f'{t}[{i},{j}]', line_width=1, row=1, col=1)
+                                line_dash='dash', line_width=1, **kw)    
+            fig.add_scatter(y=v[tslice, j], line_color=color, name=name, legendgroup=f'{t}[{i},{j}]', line_width=1, **kw)
+
+        fig.update_xaxes(mirror='allticks', ticks='outside', linewidth=1, linecolor='black', **kw)
+        fig.update_yaxes(mirror='allticks', ticks='outside', linewidth=1, linecolor='black', **kw)
+        fig.update_layout(template='plotly_white', height=500, width=900)
+
+        if subplots: 
+            kw = dict(row=1, col=2) 
+        else: 
+            if show: 
+                fig.show()
             
+            fig = go.Figure()
+            kw = dict()
+
         for j in range(x.shape[1]): 
             color = px.colors.qualitative.T10[j % len(px.colors.qualitative.T10)]
+            name = names.pop(f'x[{i},{j}]', f'x[{i},{j}]')
 
             if i < len(hgm) - 1:
                 fig.add_trace(Colorbar(mean=x[tslice, j], var=Cx[tslice, j, j], fillcolor=color, legendgroup=f'x[{i},{j}]', 
-                                       opacity=0.3, showlegend=False), row=1, col=2)
+                                       opacity=0.3, showlegend=False), **kw)
             if gen is not None: 
                 fig.add_scatter(y=xr[tslice, j], line_color=color, showlegend=False, legendgroup=f'x[{i},{j}]', 
-                                line_dash='dash', line_width=1, row=1, col=2)    
-            fig.add_scatter(y=x[tslice, j], line_color=color, name=f'x[{i},{j}]', legendgroup=f'x[{i},{j}]', line_width=1, row=1, col=2)
-        fig.update_xaxes(mirror='allticks', ticks='outside', linewidth=1, linecolor='black')
-        fig.update_yaxes(mirror='allticks', ticks='outside', linewidth=1, linecolor='black')
+                                line_dash='dash', line_width=1, **kw)    
+            fig.add_scatter(y=x[tslice, j], line_color=color, name=name, legendgroup=f'x[{i},{j}]', line_width=1, **kw)
+
+        fig.update_xaxes(mirror='allticks', ticks='outside', linewidth=1, linecolor='black', **kw)
+        fig.update_yaxes(mirror='allticks', ticks='outside', linewidth=1, linecolor='black', **kw)
         fig.update_layout(template='plotly_white', height=500, width=900)
-        figs.append(fig)
-        
+
+
+        if subplots: 
+            figs.append(fig)
+        else: 
+            _figs.append(fig)
+            figs.append(_figs)
+
         if show: 
             fig.show()
         

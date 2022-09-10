@@ -9,3 +9,4 @@ from .dem_defaults  import dem_defaults
 
 from .special_matrices import *
 from .utils import *
+from .helper import *
