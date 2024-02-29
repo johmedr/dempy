@@ -230,8 +230,8 @@ class DEMInversion:
         for i in range(nl): 
             # Precision (R) and covariance of generalized errors
             # --------------------------------------------------
-            iVv    = DEMInversion.generalized_covariance(n, M[i].sv * M.dt)
-            iVw    = DEMInversion.generalized_covariance(n, M[i].sw * M.dt)
+            iVv    = DEMInversion.generalized_covariance(n, M[i].sv)
+            iVw    = DEMInversion.generalized_covariance(n, M[i].sw)
 
             # noise on causal states (Q)
             # --------------------------

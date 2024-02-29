@@ -12,8 +12,7 @@ def dem_z(M: HierarchicalGaussianModel, N: int):
     """ Generates states noise w and causes noise z """
 
     nl = len(M)
-    dt = M.dt
-    t  = np.arange(N, dtype=np.float64) * dt
+    t  = np.arange(N, dtype=np.float64)
     z  = []
     w  = []
 
