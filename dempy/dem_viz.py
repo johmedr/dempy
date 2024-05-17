@@ -105,7 +105,7 @@ def plot_dem_generate(hgm, gen, time=None, show=True, tmin=0, tmax=None, names=N
     return figs
 
 
-def plot_dem_states(hgm, results, gen=None, time=None, tmin=0, tmax=None, overlay=None, show=True, names=None, subplots=True): 
+def plot_dem_states(hgm, results, gen=None, time=None, tmin=0, tmax=None, overlay=None, show=True, names=None, subplots=True, show_ci=True): 
 
     if time is not None:
         tmin = np.argmin(np.abs(time - tmin)).astype('i')
@@ -171,7 +171,7 @@ def plot_dem_states(hgm, results, gen=None, time=None, tmin=0, tmax=None, overla
             color = px.colors.qualitative.T10[j % len(px.colors.qualitative.T10)]
             name = names.pop(f'{t}[{i},{j}]', f'{t}[{i},{j}]')
 
-            if i > 0:
+            if i > 0 and show_ci:
                 fig.add_trace(Colorbar(mean=v[tslice, j], var=Cv[tslice, j, j], fillcolor=color, legendgroup=f'{t}[{i},{j}]', 
                                        opacity=0.3, showlegend=False), **kw)
             if gen is not None: 
@@ -196,7 +196,7 @@ def plot_dem_states(hgm, results, gen=None, time=None, tmin=0, tmax=None, overla
             color = px.colors.qualitative.T10[j % len(px.colors.qualitative.T10)]
             name = names.pop(f'x[{i},{j}]', f'x[{i},{j}]')
 
-            if i < len(hgm) - 1:
+            if i < len(hgm) - 1 and show_ci:
                 fig.add_trace(Colorbar(mean=x[tslice, j], var=Cx[tslice, j, j], fillcolor=color, legendgroup=f'x[{i},{j}]', 
                                        opacity=0.3, showlegend=False), **kw)
             if gen is not None: 

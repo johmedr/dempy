@@ -383,7 +383,7 @@ class DEMInversion:
         # ---------------------
         if nE > 1: Ebar = tqdm(desc=f'E-step (F = {-np.inf:.4e})', total=nE)
         if nM > 1: Mbar = tqdm(desc='  M-step', total=nM)
-        Tbar = tqdm(desc='timestep', total=nT)
+        if nT > 128: Tbar = tqdm(desc='timestep', total=nT)
 
         # preclude very precise states from entering free-energy/action
         # -------------------------------------------------------------
@@ -426,12 +426,14 @@ class DEMInversion:
 
             # D-step: (nD D-steps for each sample) 
             # ====================================
-            Tbar.reset()
+            if nT > 128:
+                Tbar.reset()
             for iT in range(nT): 
-                # update progress bar
-                # -------------------
-                Tbar.update()
-                Tbar.refresh()
+                if nT > 128:
+                    # update progress bar
+                    # -------------------
+                    Tbar.update()
+                    Tbar.refresh()
 
                 # [re-]set states for static systems
                 # ----------------------------------
@@ -479,15 +481,6 @@ class DEMInversion:
                     if nx == 0: 
                         pass 
 
-                    # save states at iT
-                    if iD == 0: 
-                        if iE == 0:
-                            qE.append(E.squeeze(1))
-                            qU.append(dotdict({k: v.copy() for k, v in qu.items()})) 
-                        else: 
-                            qE[iT] = E.squeeze(1)
-                            qU[iT] = dotdict({k: v.copy() for k, v in qu.items()})
-
                     # uncertainty about parameters dWdv, ...
                     if nP > 0: 
                         CJp   = np.zeros((iS.shape[0] * nP, (nx + nv) * n))
@@ -509,6 +502,7 @@ class DEMInversion:
                     # store gradient with precision as it appears a lot after
                     dEdu_iS = dE.du.T @ iS
 
+
                     # first-order derivatives
                     dVdu    = - dEdu_iS @ E - dWdu/2 - Pu @ u[0:(nx+nv)*n]
 
@@ -525,6 +519,19 @@ class DEMInversion:
                                           [   [], dVdyy,    []],
                                           [   [],    [], dVdcc]])
 
+
+                    qu.dFdu = dFdu  
+                    qu.LF   = E.T @ iS @ E 
+
+                    # save states at iT
+                    if iD == 0: 
+                        if iE == 0:
+                            qE.append(E.squeeze(1))
+                            qU.append(dotdict({k: v.copy() for k, v in qu.items()})) 
+                        else: 
+                            qE[iT] = E.squeeze(1)
+                            qU[iT] = dotdict({k: v.copy() for k, v in qu.items()})
+
                     # update conditional modes of states
                     f     = K * dFdu[..., None]  + D @ u
                     dfdu  = K * dFduu + D
@@ -534,6 +541,7 @@ class DEMInversion:
                     # ... and save them 
                     qu.x = q[:n * nx].reshape((n, nx))
                     qu.v = q[n * nx:n * (nx + nv)].reshape((n, nv))
+
 
                     # ommit part for static models
 
@@ -730,7 +738,7 @@ class DEMInversion:
             # update progress bar
             # -------------------
             if nE > 1:
-                Ebar.set_description(f'E-step (F = {Fi:.4e})')
+                Ebar.set_description(f'E-step (F-F0 = {Fi-F[0]:.4e})')
                 Ebar.update()
                 Ebar.refresh()
 
